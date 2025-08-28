@@ -1,7 +1,9 @@
-flask 
-flask-cors 
-numpy 
-scikit-learn 
-xgboost 
+flask
+flask-cors
+numpy
+scikit-learn
+xgboost
 lightgbm
 gunicorn
+hmmlearn
+
