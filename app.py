@@ -78,7 +78,7 @@ def prepare_training_data(roadmap):
     準備用於模型訓練的數據。
     將路紙轉換為特徵-標籤對。
     """
-    filtered = [r for r in roadmap if r in ['B', 'P']]
+    filtered = [r for r r in roadmap if r in ['B', 'P']]
     X = []
     y = []
     # 從第二局開始，用前 i 局的數據作為特徵，預測第 i 局的結果
@@ -147,31 +147,20 @@ def predict():
     # 接收從前端傳來的完整路紙序列
     received_roadmap = data.get("roadmap", []) or data.get("history", [])
     
-    # 過濾出有效的莊閒結果
-    filtered_received_roadmap = [r for r in received_roadmap if r in ["B", "P", "T"]] # 包含 'T' 以便完整記錄
+    # 過濾出有效的莊閒和結果，只保留 'B', 'P', 'T'
+    filtered_received_roadmap = [r for r in received_roadmap if r in ["B", "P", "T"]]
 
     # --- 修正後的數據保存邏輯 ---
+    # 假設 filtered_received_roadmap 是前端傳來「最新且完整」的遊戲歷史。
+    # 後端將直接使用此數據作為最新的歷史記錄。
     current_history_from_file = load_data()
-    new_outcomes_to_save = []
-
-    if not current_history_from_file:
-        # 如果檔案是空的，直接將所有接收到的有效數據保存
-        new_outcomes_to_save.extend(filtered_received_roadmap)
-    else:
-        # 尋找接收到的路紙與已儲存歷史數據的分歧點
-        start_index = 0
-        for i, item in enumerate(filtered_received_roadmap):
-            if i < len(current_history_from_file) and item == current_history_from_file[i]:
-                start_index += 1
-            else:
-                break
-        
-        # 只追加真正的新數據
-        new_outcomes_to_save.extend(filtered_received_roadmap[start_index:])
     
-    if new_outcomes_to_save:
-        current_history_from_file.extend(new_outcomes_to_save)
-        save_data(current_history_from_file)
+    # 如果接收到的路紙與現有歷史數據不同，則更新歷史檔案
+    if filtered_received_roadmap != current_history_from_file:
+        save_data(filtered_received_roadmap) # 直接用前端提供的完整路紙覆蓋
+        print(f"歷史數據已更新為：{filtered_received_roadmap}")
+    else:
+        print("收到的路紙與現有歷史數據一致，無需更新。")
     # --- 數據保存邏輯結束 ---
     
     # 實際用於特徵提取和預測的數據 (只考慮 'B'/'P'，因為模型只預測莊閒)
@@ -266,4 +255,3 @@ if __name__ == "__main__":
         print("首次訓練完成。")
     
     app.run(host="0.0.0.0", port=8000, debug=False)
-
