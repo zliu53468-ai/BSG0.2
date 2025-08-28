@@ -8,6 +8,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import SGDClassifier
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
+# from hmmlearn import hmm # 如果要使用 HMM，請取消註解此行並重新實作 HMM 邏輯
 
 app = Flask(__name__)
 CORS(app)
@@ -16,7 +17,12 @@ CORS(app)
 HISTORY_FILE = 'history.json'
 MODEL_DIR = 'models'
 
+# 標籤映射
+label_map = {'莊': 0, '閒': 1}
+reverse_map = {0: '莊', 1: '閒'}
+
 # 初始歷史數據，會在首次啟動時寫入檔案
+# 'P' 代表閒 (Player), 'B' 代表莊 (Banker), 'T' 代表和 (Tie)
 INITIAL_HISTORY_DATA = [
     "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P", "B", "B", "P", "B", "B", "P", "T", "T", "B", "P", "B", "B", "B", "B", "B", "P", "P", "B", "P", "B", "B", "P", "P", "P", "P", "P", "P", "B", "B", "T", "B", "T", "B", "P", "P", "P", "B", "P", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "B", "P", "B", "P", "B", "B", "P", "B", "P", "T", "T", "B", "B", "B", "B", "P", "B", "B", "B", "P", "B", "T", "P", "P", "B", "B", "B", "P", "P", "P", "B", "P", "B", "P", "P", "P", "B", "T", "B", "P", "B", "T", "B", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "B", "T", "T", "B", "P", "B", "B", "P", "P", "P", "B", "P", "B", "T", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "B", "P", "T", "B", "P", "T", "B", "B", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "B", "B", "P", "B", "P", "B", "T", "B", "B", "P", "P", "B", "B", "P", "T", "P", "P", "B", "P", "B", "B", "B", "B", "P", "B", "P", "B", "B", "T", "P", "B", "P", "B", "T", "T", "B", "P", "P", "B", "P", "P", "B", "B", "P", "B", "P", "T", "P", "P", "P", "P", "B", "B", "B", "B", "B", "P", "B", "P", "B", "P", "B", "B", "P", "B", "P", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "B", "P", "B", "P", "B", "P", "T", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "P", "P", "B", "B", "P", "B", "T", "B", "T", "B", "P", "B", "P", "T", "P", "B", "B", "P", "P", "P", "B", "P", "B", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "B", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "P", "P", "B", "P", "P", "P", "P", "P", "B", "P", "P", "B", "P", "B", "B", "P", "T", "B", "P", "B", "P", "P", "T", "P", "B", "B", "T", "B", "P", "T", "P", "B", "P", "B", "B", "P", "B", "B", "T", "P", "P", "P", "P", "T", "P", "T", "B", "B", "P", "B", "B", "P", "P", "P", "B", "P", "B", "P", "T", "P", "P", "T", "P", "P", "B", "P", "P", "B", "P", "P", "B", "P", "P", "T", "B", "P", "B", "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "T", "T", "B", "P", "B", "B", "B", "T", "T", "B", "B", "P", "B", "T", "P", "B", "P", "B", "P", "P", "P", "B", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", "P", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "B", "B", "B", "P", "B", "T", "T", "P", "B", "B", "B", "P", "B", "B", "P", "B", "P", "B", "P", "P", "P", "P", "P", "P", "B", "B", "B", "P", "T", "P", "B", "T", "B", "B", "B", "B", "T", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "B", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "B", "B", "B", "T", "B", "B", "P", "B", "P", "T", "P", "B", "B", "P", "B", "B", "B", "P", "P", "P", "B", "P", "P", "B", "P", "P", "B", "B", "P", "P", "B", "P", "B", "B", "B", "B", "B", "B", "B", "B", "P", "T", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", "P", "P", "T", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "P", "B", "T", "P", "B", "B", "P", "B", "P", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "T", "P", "P", "B", "T", "B", "P", "P", "P", "B", "B", "P", "B", "B", "P", "B", "P", "P", "B", "B", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
 ]
@@ -34,39 +40,48 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False)
 
 def extract_features(roadmap):
-    """從路紙中提取特徵。"""
-    N = 20
+    """
+    從路紙中提取特徵。
+    特徵包括：莊/閒比例、連勝次數、連勝類型、前一局結果。
+    """
+    N = 20 # 考慮最近20局
     window = roadmap[-N:] if len(roadmap) >= N else roadmap[:]
     
-    b_count = window.count('莊')
-    p_count = window.count('閒')
+    b_count = window.count('B') # 'B' 代表莊
+    p_count = window.count('P') # 'P' 代表閒
     total = b_count + p_count
     
+    # 避免除以零，若無有效局數則給予預設值
     b_ratio = b_count / total if total > 0 else 0.5
     p_ratio = p_count / total if total > 0 else 0.5
     
     streak = 0
     last = None
+    # 計算連勝
     for item in reversed(window):
-        if item in ['莊', '閒']:
+        if item in ['B', 'P']: # 只考慮莊閒結果
             if last is None:
                 last = item
                 streak = 1
             elif item == last:
                 streak += 1
             else:
-                break
+                break # 連勝中斷
     
-    streak_type = 0 if last == '莊' else 1 if last == '閒' else -1
-    prev = label_map.get(window[-1], -1) if window else -1
+    streak_type = 0 if last == 'B' else 1 if last == 'P' else -1 # 莊為0, 閒為1, 無連勝為-1
+    prev = label_map.get(window[-1], -1) if window else -1 # 前一局結果
 
     return np.array([b_ratio, p_ratio, streak, streak_type, prev], dtype=np.float32)
 
 def prepare_training_data(roadmap):
-    """準備用於模型訓練的數據。"""
-    filtered = [r for r in roadmap if r in ['莊', '閒']]
+    """
+    準備用於模型訓練的數據。
+    將路紙轉換為特徵-標籤對。
+    """
+    filtered = [r for r in roadmap if r in ['B', 'P']]
     X = []
     y = []
+    # 從第二局開始，用前 i 局的數據作為特徵，預測第 i 局的結果
     for i in range(1, len(filtered)):
         features = extract_features(filtered[:i])
         X.append(features)
@@ -117,6 +132,7 @@ def train_models():
 
 @app.route("/", methods=["GET"])
 def home():
+    """根路由：提供服務狀態訊息。"""
     return jsonify({
         "status": "success",
         "message": "Multi-Model AI Engine is running."
@@ -124,17 +140,43 @@ def home():
 
 @app.route("/predict", methods=["POST"])
 def predict():
+    """
+    預測路由：接收路紙數據，保存新數據，並使用預訓練模型進行預測。
+    """
     data = request.get_json()
-    roadmap = data.get("roadmap", []) or data.get("history", [])
-    last_valid = [r for r in roadmap if r in ["莊", "閒"]]
+    # 接收從前端傳來的完整路紙序列
+    received_roadmap = data.get("roadmap", []) or data.get("history", [])
+    
+    # 過濾出有效的莊閒結果
+    filtered_received_roadmap = [r for r in received_roadmap if r in ["B", "P", "T"]] # 包含 'T' 以便完整記錄
 
-    # 接收新數據並保存，但不進行訓練
-    if last_valid:
-        current_history = load_data()
-        # 避免重複寫入
-        if not current_history or current_history[-1] != last_valid[-1]:
-            current_history.extend(last_valid)
-            save_data(current_history)
+    # --- 修正後的數據保存邏輯 ---
+    current_history_from_file = load_data()
+    new_outcomes_to_save = []
+
+    if not current_history_from_file:
+        # 如果檔案是空的，直接將所有接收到的有效數據保存
+        new_outcomes_to_save.extend(filtered_received_roadmap)
+    else:
+        # 尋找接收到的路紙與已儲存歷史數據的分歧點
+        start_index = 0
+        for i, item in enumerate(filtered_received_roadmap):
+            if i < len(current_history_from_file) and item == current_history_from_file[i]:
+                start_index += 1
+            else:
+                break
+        
+        # 只追加真正的新數據
+        new_outcomes_to_save.extend(filtered_received_roadmap[start_index:])
+    
+    if new_outcomes_to_save:
+        current_history_from_file.extend(new_outcomes_to_save)
+        save_data(current_history_from_file)
+    # --- 數據保存邏輯結束 ---
+    
+    # 實際用於特徵提取和預測的數據 (只考慮 'B'/'P'，因為模型只預測莊閒)
+    current_game_sequence_for_prediction = [r for r in filtered_received_roadmap if r in ["B", "P"]]
+
 
     # 檢查是否有已訓練好的模型
     model_files = ['sgd_model.pkl', 'xgb_model.pkl', 'lgbm_model.pkl', 'scaler.pkl']
@@ -155,7 +197,8 @@ def predict():
     lgbm = joblib.load(os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
 
     # 特徵轉換與預測
-    features = extract_features(roadmap).reshape(1, -1)
+    # 這裡使用 `current_game_sequence_for_prediction` 來提取特徵
+    features = extract_features(current_game_sequence_for_prediction).reshape(1, -1)
     features_scaled = scaler.transform(features)
 
     sgd_pred_prob = sgd.predict_proba(features_scaled)[0]
@@ -180,7 +223,9 @@ def predict():
                    xgb_pred_prob[1] * weight_xgb +
                    lgb_pred_prob[1] * weight_lgbm) / total_weights
     
-    tie = 0.05
+    # 假定和局機率，可以根據歷史數據調整
+    # 如果未來需要 HMM 預測，這裡可以考慮如何將 HMM 的輸出與其他模型整合
+    tie = 0.05 
     
     # 綜合建議
     if banker_prob > player_prob and banker_prob > tie:
@@ -204,16 +249,16 @@ def predict():
 
 if __name__ == "__main__":
     # 在第一次啟動時，自動檢查並初始化數據與訓練
+    # 確保模型資料夾存在
+    if not os.path.exists(MODEL_DIR):
+        os.makedirs(MODEL_DIR)
+
     if not os.path.exists(HISTORY_FILE):
         print("首次啟動：偵測到沒有歷史數據檔案，正在自動建立並寫入初始數據...")
         save_data(INITIAL_HISTORY_DATA)
         print("初始數據寫入完成。")
 
-    # 確保模型資料夾存在
-    if not os.path.exists(MODEL_DIR):
-        os.makedirs(MODEL_DIR)
-
-    # 只有在模型檔案不存在時才進行訓練
+    # 只有在所有模型檔案都不存在時才進行訓練
     model_files = ['sgd_model.pkl', 'xgb_model.pkl', 'lgbm_model.pkl', 'scaler.pkl']
     if not all(os.path.exists(os.path.join(MODEL_DIR, f)) for f in model_files):
         print("偵測到模型檔案不存在，正在自動執行首次訓練...")
@@ -221,3 +266,4 @@ if __name__ == "__main__":
         print("首次訓練完成。")
     
     app.run(host="0.0.0.0", port=8000, debug=False)
+
