@@ -1,0 +1,13 @@
+flask 
+
+ flask-cors 
+
+ numpy 
+
+ scikit-learn 
+
+ xgboost 
+
+ lightgbm
+
+gunicorn
