@@ -67,16 +67,20 @@ def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
         if hmm_model and hasattr(hmm_model, 'emissionprob_') and len(roadmap) > 1:
             try:
                 hmm_observations = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
-                if len(hmm_observations) > 1:
+                # **修正**: 增加保護，避免在只有一種觀測值時出錯
+                if len(hmm_observations) > 1 and len(np.unique(hmm_observations)) > 1:
                     hidden_states = hmm_model.predict(hmm_observations)
                     last_hidden_state = hidden_states[-1]
                     emission_probs = hmm_model.emissionprob_[last_hidden_state]
-                    hmm_banker_prob = emission_probs[LABEL_MAP['B']]
-                    hmm_player_prob = emission_probs[LABEL_MAP['P']]
-                    total_prob = hmm_banker_prob + hmm_player_prob
-                    if total_prob > 0:
-                        hmm_banker_prob /= total_prob
-                        hmm_player_prob /= total_prob
+                    
+                    # **修正**: 增加對 emission_probs 長度的檢查
+                    if len(emission_probs) > 1:
+                        hmm_banker_prob = emission_probs[LABEL_MAP['B']]
+                        hmm_player_prob = emission_probs[LABEL_MAP['P']]
+                        total_prob = hmm_banker_prob + hmm_player_prob
+                        if total_prob > 0:
+                            hmm_banker_prob /= total_prob
+                            hmm_player_prob /= total_prob
             except Exception as e:
                 logging.warning(f"HMM 特徵提取失敗: {e}.")
         features.extend([hmm_banker_prob, hmm_player_prob])
@@ -99,23 +103,27 @@ def train_hmm_model(all_history):
     hmm_model_path = os.path.join(MODEL_DIR, 'hmm_model.pkl')
     logging.info("開始訓練 HMM 模型...")
     hmm_observations = np.array([LABEL_MAP[r] for r in all_history if r in LABEL_MAP]).reshape(-1, 1)
-    if len(hmm_observations) < 20 or len(np.unique(hmm_observations)) < 2:
-        logging.warning("HMM 訓練數據不足，跳過訓練。")
+    
+    unique_obs = np.unique(hmm_observations)
+    logging.info(f"HMM 訓練數據中有 {len(unique_obs)} 種獨特結果: {unique_obs}")
+
+    if len(hmm_observations) < 20 or len(unique_obs) < 2:
+        logging.warning("HMM 訓練數據不足或缺乏多樣性 (少於2種結果)，跳過訓練。")
         return None
     try:
-        # **修正**: 改用 MultinomialHMM，更適合離散觀測值
-        hmm_model = hmm.MultinomialHMM(n_components=2, n_iter=100, random_state=42)
+        hmm_model = hmm.MultinomialHMM(n_components=2, n_iter=100, random_state=42, tol=0.001)
         hmm_model.fit(hmm_observations)
         
-        if not hasattr(hmm_model, 'emissionprob_'):
-            logging.error("HMM 模型訓練後未產生 'emissionprob_' 屬性，訓練失敗。")
+        # **修正**: 訓練後進行更嚴格的檢查
+        if not hasattr(hmm_model, 'emissionprob_') or hmm_model.emissionprob_.shape[1] < 2:
+            logging.error(f"HMM 模型訓練失敗，emissionprob_ 形狀不符: {hmm_model.emissionprob_.shape if hasattr(hmm_model, 'emissionprob_') else '不存在'}")
             return None
 
         joblib.dump(hmm_model, hmm_model_path)
         logging.info(f"HMM 模型已成功儲存至 {hmm_model_path}")
         return hmm_model
     except Exception as e:
-        logging.error(f"HMM 模型訓練失敗: {e}", exc_info=True)
+        logging.error(f"HMM 模型訓練時發生例外: {e}", exc_info=True)
         return None
 
 def train_models():
@@ -133,6 +141,7 @@ def train_models():
 
     hmm_model = train_hmm_model(all_history)
     use_hmm_features = hmm_model is not None
+    logging.info(f"HMM 模型訓練完成。是否使用 HMM 特徵: {use_hmm_features}")
 
     logging.info("準備訓練 XGBoost 模型...")
     X_train, y_train = prepare_training_data(all_history, hmm_model, use_hmm_features)
