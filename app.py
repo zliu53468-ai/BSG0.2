@@ -55,7 +55,6 @@ def load_data():
                 return json.load(f)
     except Exception as e:
         app.logger.error(f"讀取歷史數據失敗: {e}", exc_info=True)
-    # 如果檔案不存在或讀取失敗，回傳空列表
     return []
 
 def save_data(data):
@@ -100,7 +99,8 @@ def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
         hmm_banker_prob = 0.5
         hmm_player_prob = 0.5
         
-        if hmm_model and len(roadmap) > 1:
+        # **修正**: 增加 hasattr 檢查，確保模型是成功訓練的
+        if hmm_model and hasattr(hmm_model, 'emissionprob_') and len(roadmap) > 1:
             try:
                 hmm_observations = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
                 if len(hmm_observations) > 1:
@@ -129,20 +129,14 @@ def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
 
 @app.route("/", methods=["GET"])
 def home():
-    """根路由：提供服務狀態訊息。"""
-    return jsonify({
-        "status": "online",
-        "message": "Baccarat AI Prediction Engine is running."
-    })
+    return jsonify({"status": "online", "message": "Baccarat AI Prediction Engine is running."})
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """健康檢查路由"""
     return jsonify({"status": "healthy"})
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    """預測路由：接收路紙數據，回傳預測機率。"""
     try:
         data = request.get_json()
         if not data or "roadmap" not in data:
@@ -150,13 +144,11 @@ def predict():
 
         received_roadmap = [r for r in data["roadmap"] if r in ["B", "P", "T"]]
         
-        # 僅在數據有變化時更新歷史檔案
         current_history = load_data()
         if received_roadmap != current_history:
             save_data(received_roadmap)
             app.logger.info(f"歷史數據已更新，新數據長度: {len(received_roadmap)}")
 
-        # 載入預先訓練好的模型
         scaler = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
         xgb = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
         feature_info = joblib.load(os.path.join(MODEL_DIR, 'feature_info.pkl'))
