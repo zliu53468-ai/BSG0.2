@@ -78,7 +78,8 @@ def prepare_training_data(roadmap):
     準備用於模型訓練的數據。
     將路紙轉換為特徵-標籤對。
     """
-    filtered = [r for r r in roadmap if r in ['B', 'P']]
+    # 修正語法錯誤：`r r in roadmap` 改為 `r in roadmap`
+    filtered = [r for r in roadmap if r in ['B', 'P']]
     X = []
     y = []
     # 從第二局開始，用前 i 局的數據作為特徵，預測第 i 局的結果
