@@ -5,10 +5,8 @@ import joblib
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import SGDClassifier
 from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
-# from hmmlearn import hmm # 如果要使用 HMM，請取消註解此行並重新實作 HMM 邏輯
+from hmmlearn import hmm # 啟用 HMM
 
 app = Flask(__name__)
 CORS(app)
@@ -18,9 +16,8 @@ HISTORY_FILE = 'history.json'
 MODEL_DIR = 'models'
 
 # 標籤映射
-# 修正: 將 '莊'/'閒' 鍵改為 'B'/'P' 以匹配數據中的表示
-label_map = {'B': 0, 'P': 1} 
-reverse_map = {0: '莊', 1: '閒'} # 反向映射仍使用中文顯示，這是沒問題的
+label_map = {'B': 0, 'P': 1}
+reverse_map = {0: '莊', 1: '閒'}
 
 # 初始歷史數據，會在首次啟動時寫入檔案
 # 'P' 代表閒 (Player), 'B' 代表莊 (Banker), 'T' 代表和 (Tie)
@@ -43,10 +40,11 @@ def save_data(data):
     with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False)
 
-def extract_features(roadmap):
+def extract_features(roadmap, hmm_model=None):
     """
     從路紙中提取特徵。
     特徵包括：莊/閒比例、連勝次數、連勝類型、前一局結果。
+    如果提供了 HMM 模型，則會額外提取 HMM 預測的下一局莊閒機率作為特徵。
     """
     N = 20 # 考慮最近20局
     window = roadmap[-N:] if len(roadmap) >= N else roadmap[:]
@@ -75,45 +73,152 @@ def extract_features(roadmap):
     streak_type = 0 if last == 'B' else 1 if last == 'P' else -1 # 莊為0, 閒為1, 無連勝為-1
     prev = label_map.get(window[-1], -1) if window else -1 # 前一局結果
 
-    return np.array([b_ratio, p_ratio, streak, streak_type, prev], dtype=np.float32)
+    features = [b_ratio, p_ratio, streak, streak_type, prev]
 
-def prepare_training_data(roadmap):
+    # --- HMM 特徵提取 ---
+    hmm_banker_prob = 0.5
+    hmm_player_prob = 0.5
+    hmm_prediction = "等待" # HMM 的獨立預測結果
+
+    if hmm_model and len(roadmap) > 1: # HMM 至少需要兩個觀察值才能預測轉換
+        # 準備 HMM 觀察序列 (只考慮 'B'/'P' 並轉換為數字)
+        hmm_observations_for_prediction = np.array([label_map[r] for r in roadmap if r in ['B', 'P']]).reshape(-1, 1)
+        
+        if hmm_observations_for_prediction.size > 0:
+            try:
+                # 獲取當前序列最可能的隱藏狀態
+                # 注意: hmmlearn 的 predict_proba 是預測每個時間點的狀態機率
+                # 我們需要的是下一觀察值的機率
+                # 這裡我們利用當前最可能的狀態，結合 emissionprob_ 和 transmat_ 來推斷
+                
+                # 獲取當前序列的狀態機率 (最後一個時間點)
+                # 使用 `predict` 找到最可能的隱藏狀態序列
+                hidden_states = hmm_model.predict(hmm_observations_for_prediction)
+                last_hidden_state = hidden_states[-1]
+                
+                # 根據最後一個隱藏狀態的發射機率來預測下一觀察值
+                hmm_banker_prob = hmm_model.emissionprob_[last_hidden_state, 0] # 狀態發射 'B' (0) 的機率
+                hmm_player_prob = hmm_model.emissionprob_[last_hidden_state, 1] # 狀態發射 'P' (1) 的機率
+
+                # 確保機率和為 1
+                total_hmm_prob = hmm_banker_prob + hmm_player_prob
+                if total_hmm_prob > 0:
+                    hmm_banker_prob /= total_hmm_prob
+                    hmm_player_prob /= total_hmm_prob
+                else: # 避免除以零
+                    hmm_banker_prob = 0.5
+                    hmm_player_prob = 0.5
+
+                if hmm_banker_prob > hmm_player_prob:
+                    hmm_prediction = "莊"
+                elif hmm_player_prob > hmm_banker_prob:
+                    hmm_prediction = "閒"
+                else:
+                    hmm_prediction = "等待"
+
+            except Exception as e:
+                print(f"HMM 預測失敗: {e}")
+                # HMM 預測失敗時，使用預設值
+                hmm_banker_prob = 0.5
+                hmm_player_prob = 0.5
+                hmm_prediction = "等待"
+    
+    features.extend([hmm_banker_prob, hmm_player_prob]) # 將 HMM 預測機率作為新特徵
+    
+    return np.array(features, dtype=np.float32), hmm_prediction # 返回 HMM 的獨立預測結果
+
+def prepare_training_data(roadmap, hmm_model=None):
     """
     準備用於模型訓練的數據。
     將路紙轉換為特徵-標籤對。
+    如果提供了 HMM 模型，則會將 HMM 預測機率作為額外特徵。
     """
     filtered = [r for r in roadmap if r in ['B', 'P']]
     X = []
     y = []
     # 從第二局開始，用前 i 局的數據作為特徵，預測第 i 局的結果
     for i in range(1, len(filtered)):
-        features = extract_features(filtered[:i])
-        y.append(label_map[filtered[i]]) # 此處會導致 KeyError if label_map doesn't match 'B' or 'P'
-        X.append(features)
+        # 注意: 這裡傳遞的是 `filtered[:i]`，這是一個子序列，HMM 應該基於這個子序列進行預測
+        current_features, _ = extract_features(filtered[:i], hmm_model) 
+        X.append(current_features)
+        y.append(label_map[filtered[i]])
     return np.array(X, dtype=np.float32), np.array(y, dtype=np.int32)
+
+def train_hmm_model(all_history):
+    """
+    訓練並儲存 HMM 模型。
+    """
+    hmm_model_path = os.path.join(MODEL_DIR, 'hmm_model.pkl')
+    if os.path.exists(hmm_model_path):
+        print("HMM 模型檔案已存在，無需重新訓練。")
+        return joblib.load(hmm_model_path)
+
+    print("開始訓練 HMM 模型...")
+    hmm_observations_sequence = np.array([label_map[r] for r in all_history if r in ['B', 'P']]).reshape(-1, 1)
+
+    if hmm_observations_sequence.size < 10: # HMM 需要足夠的序列數據
+        print("HMM 訓練數據不足 (至少需要10個莊閒結果)，跳過 HMM 訓練。")
+        return None
+
+    # 設置 HMM 模型 (3 個隱藏狀態: 莊趨勢, 閒趨勢, 交替/震盪)
+    # covariance_type="diag" 適用於每個特徵獨立的情況 (這裡只有一個特徵: 莊/閒)
+    hmm_model = hmm.GaussianHMM(n_components=3, covariance_type="diag", n_iter=200, random_state=42)
+    
+    try:
+        hmm_model.fit(hmm_observations_sequence)
+        joblib.dump(hmm_model, hmm_model_path)
+        print("HMM 模型訓練完成並已儲存。")
+        return hmm_model
+    except Exception as e:
+        print(f"HMM 模型訓練失敗: {e}")
+        return None
+
 
 def train_models_if_needed():
     """
     檢查模型檔案是否存在，若不存在則訓練並儲存模型。
+    現在會先訓練 HMM，然後將 HMM 的輸出作為特徵訓練 XGBoost。
     """
     print("開始檢查模型是否需要訓練...")
-    model_files = ['sgd_model.pkl', 'xgb_model.pkl', 'lgbm_model.pkl', 'scaler.pkl']
-    all_models_exist = all(os.path.exists(os.path.join(MODEL_DIR, f)) for f in model_files)
+    
+    # 確保模型資料夾存在
+    if not os.path.exists(MODEL_DIR):
+        os.makedirs(MODEL_DIR)
 
-    if not all_models_exist:
-        print("偵測到模型檔案不存在，正在自動執行首次訓練...")
-        # 確保模型資料夾存在
-        if not os.path.exists(MODEL_DIR):
-            os.makedirs(MODEL_DIR)
+    # 載入所有歷史數據
+    all_history = load_data()
+    if not all_history:
+        print("沒有足夠的歷史數據來訓練模型。")
+        return
 
-        all_history = load_data() # 確保在訓練前載入所有歷史數據
-        if not all_history:
-            print("沒有足夠的歷史數據來訓練模型。")
-            return
+    # 1. 訓練或載入 HMM 模型
+    hmm_model = train_hmm_model(all_history)
+    if hmm_model is None:
+        print("HMM 模型未能成功訓練或載入，XGBoost 將不包含 HMM 特徵。")
+    
+    # 2. 檢查 XGBoost 模型是否需要訓練
+    model_files = ['xgb_model.pkl', 'scaler.pkl'] # 只檢查 XGBoost 和 scaler
+    all_other_models_exist = all(os.path.exists(os.path.join(MODEL_DIR, f)) for f in model_files)
 
-        # 準備訓練資料
-        X_train, y_train = prepare_training_data(all_history)
+    if not all_other_models_exist:
+        print("偵測到 XGBoost 模型檔案不存在，正在自動執行訓練...")
         
+        # 準備包含 HMM 特徵的訓練資料
+        X_train, y_train = prepare_training_data(all_history, hmm_model)
+        
+        # 特徵數量現在是 5 (原始) + 2 (HMM機率) = 7
+        expected_feature_dim = 7 
+        if X_train.shape[1] != expected_feature_dim:
+             print(f"警告: 訓練數據特徵維度不符 (預期 {expected_feature_dim}, 實際 {X_train.shape[1]})，可能HMM訓練失敗。")
+             # 如果 HMM 訓練失敗，X_train 可能只有 5 個特徵，這會導致錯誤
+             # 這裡可以選擇重新訓練不含 HMM 特徵的模型，或者直接返回
+             # 為了簡化，如果維度不符，我們假設 HMM 特徵沒有成功加入，並調整預期維度
+             if hmm_model is None and X_train.shape[1] == 5:
+                 print("HMM 模型未載入，使用不含HMM特徵的訓練數據。")
+             else:
+                 print("訓練數據特徵維度錯誤，無法訓練 XGBoost。")
+                 return
+
         if len(X_train) < 5 or len(np.unique(y_train)) < 2:
             print("訓練資料不足或不平衡，無法進行訓練。")
             return
@@ -123,25 +228,15 @@ def train_models_if_needed():
         X_scaled = scaler.fit_transform(X_train)
         joblib.dump(scaler, os.path.join(MODEL_DIR, 'scaler.pkl'))
 
-        # 訓練與儲存模型
-        sgd = SGDClassifier(loss='log_loss', max_iter=2000, tol=1e-4, 
-                            learning_rate='adaptive', eta0=0.01, penalty='l2', random_state=42)
-        sgd.fit(X_scaled, y_train)
-        joblib.dump(sgd, os.path.join(MODEL_DIR, 'sgd_model.pkl'))
-
+        # 訓練與儲存 XGBoost 模型
         xgb = XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric='logloss',
                             learning_rate=0.1, max_depth=3, random_state=42)
         xgb.fit(X_scaled, y_train)
         joblib.dump(xgb, os.path.join(MODEL_DIR, 'xgb_model.pkl'))
 
-        lgbm = LGBMClassifier(n_estimators=100, learning_rate=0.05, num_leaves=20,
-                              max_depth=5, random_state=42)
-        lgbm.fit(X_scaled, y_train)
-        joblib.dump(lgbm, os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
-
-        print("模型訓練完成並已儲存。")
+        print("XGBoost 模型訓練完成並已儲存。")
     else:
-        print("模型檔案已存在，無需重新訓練。")
+        print("XGBoost 模型檔案已存在，無需重新訓練。")
 
 
 # 在應用程式啟動時立即執行模型檢查和訓練
@@ -169,13 +264,10 @@ def predict():
     filtered_received_roadmap = [r for r in received_roadmap if r in ["B", "P", "T"]]
 
     # --- 數據保存邏輯 ---
-    # 假設 filtered_received_roadmap 是前端傳來「最新且完整」的遊戲歷史。
-    # 後端將直接使用此數據作為最新的歷史記錄。
     current_history_from_file = load_data()
     
-    # 如果接收到的路紙與現有歷史數據不同，則更新歷史檔案
     if filtered_received_roadmap != current_history_from_file:
-        save_data(filtered_received_roadmap) # 直接用前端提供的完整路紙覆蓋
+        save_data(filtered_received_roadmap)
         print(f"歷史數據已更新為：{filtered_received_roadmap}")
     else:
         print("收到的路紙與現有歷史數據一致，無需更新。")
@@ -185,63 +277,53 @@ def predict():
     current_game_sequence_for_prediction = [r for r in filtered_received_roadmap if r in ["B", "P"]]
 
 
-    # 檢查是否有已訓練好的模型 (此處為運行時檢查，主要用於防止訓練失敗導致的錯誤)
-    model_files = ['sgd_model.pkl', 'xgb_model.pkl', 'lgbm_model.pkl', 'scaler.pkl']
+    # 檢查所有模型檔案 (包括 HMM 和 XGBoost) 是否存在
+    model_files = ['xgb_model.pkl', 'scaler.pkl', 'hmm_model.pkl']
     if not all(os.path.exists(os.path.join(MODEL_DIR, f)) for f in model_files):
-        print("警告: 預測時發現模型檔案缺失，回傳預設機率。請檢查服務啟動日誌中的訓練過程。")
+        print("警告: 預測時發現部分模型檔案缺失，回傳預設機率。請檢查服務啟動日誌中的訓練過程。")
         return jsonify({
             "banker": 0.5,
             "player": 0.5,
             "tie": 0.05,
             "details": {
-                "suggestion": "請先執行模型訓練任務。" # 此處提示前端，但實際已嘗試在啟動時訓練
+                "xgb": "N/A", "hmm": "N/A",
+                "suggestion": "請先執行模型訓練任務。"
             }
         })
     
-    # 載入已訓練好的模型和 Scaler
+    # 載入所有已訓練好的模型和 Scaler
     scaler = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
-    sgd = joblib.load(os.path.join(MODEL_DIR, 'sgd_model.pkl'))
     xgb = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
-    lgbm = joblib.load(os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
+    hmm_model = joblib.load(os.path.join(MODEL_DIR, 'hmm_model.pkl'))
 
     # 特徵轉換與預測
-    # 這裡使用 `current_game_sequence_for_prediction` 來提取特徵
-    features = extract_features(current_game_sequence_for_prediction).reshape(1, -1)
+    # 這裡使用 `current_game_sequence_for_prediction` 來提取特徵，並包含 HMM 特徵
+    features, hmm_prediction = extract_features(current_game_sequence_for_prediction, hmm_model)
+    
     # 如果沒有足夠的有效歷史數據來提取特徵，可能導致錯誤
-    if features.size == 0:
-        print("警告: 沒有足夠的莊閒結果來提取特徵，回傳預設機率。")
+    # 這裡的 features.size 應該是 5 (原始) + 2 (HMM的2個機率) = 7
+    expected_feature_size = 7 
+    if features.size != expected_feature_size: 
+        print(f"警告: 特徵數量不符 ({features.size} != {expected_feature_size})，回傳預設機率。")
         return jsonify({
             "banker": 0.5,
             "player": 0.5,
             "tie": 0.05,
             "details": {
+                "xgb": "N/A", "hmm": "N/A",
                 "suggestion": "請輸入更多莊閒結果以進行預測。"
             }
         })
 
-    features_scaled = scaler.transform(features)
+    features_scaled = scaler.transform(features.reshape(1, -1))
 
-    sgd_pred_prob = sgd.predict_proba(features_scaled)[0]
     xgb_pred_prob = xgb.predict_proba(features_scaled)[0]
-    lgb_pred_prob = lgbm.predict_proba(features_scaled)[0]
 
-    sgd_pred = reverse_map[np.argmax(sgd_pred_prob)]
     xgb_pred = reverse_map[np.argmax(xgb_pred_prob)]
-    lgb_pred = reverse_map[np.argmax(lgb_pred_prob)]
 
-    # 加權整合
-    weight_sgd = 0.2
-    weight_xgb = 0.4
-    weight_lgbm = 0.4
-    total_weights = weight_sgd + weight_xgb + weight_lgbm
-
-    banker_prob = (sgd_pred_prob[0] * weight_sgd +
-                   xgb_pred_prob[0] * weight_xgb +
-                   lgb_pred_prob[0] * weight_lgbm) / total_weights
-                   
-    player_prob = (sgd_pred_prob[1] * weight_sgd +
-                   xgb_pred_prob[1] * weight_xgb +
-                   lgb_pred_prob[1] * weight_lgbm) / total_weights
+    # 加權整合 (現在只有 XGBoost，所以直接使用其預測機率)
+    banker_prob = xgb_pred_prob[0]
+    player_prob = xgb_pred_prob[1]
     
     # 假定和局機率，可以根據歷史數據調整
     tie = 0.05 
@@ -259,9 +341,8 @@ def predict():
         "player": round(player_prob, 3),
         "tie": round(tie, 3),
         "details": {
-            "sgd": f"{sgd_pred} ({sgd_pred_prob[np.argmax(sgd_pred_prob)]:.2f})",
             "xgb": f"{xgb_pred} ({xgb_pred_prob[np.argmax(xgb_pred_prob)]:.2f})",
-            "lgb": f"{lgb_pred} ({lgb_pred_prob[np.argmax(lgb_pred_prob)]:.2f})",
+            "hmm": hmm_prediction, # HMM 的獨立預測結果
             "suggestion": suggestion
         }
     })
