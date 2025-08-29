@@ -1,5 +1,4 @@
-flask
-flask-cors
-numpy
-scikit-learn
-gunicorn
+Flask==2.3.3
+Flask-CORS==4.0.0
+gunicorn==21.2.0
+xgboost==1.7.6
