@@ -64,7 +64,8 @@ def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
     if use_hmm_features:
         hmm_banker_prob = 0.5
         hmm_player_prob = 0.5
-        if hmm_model and len(roadmap) > 1:
+        # **修正**: 增加 hasattr 檢查，確保模型是成功訓練的
+        if hmm_model and hasattr(hmm_model, 'emissionprob_') and len(roadmap) > 1:
             try:
                 hmm_observations = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
                 if len(hmm_observations) > 1:
@@ -105,6 +106,10 @@ def train_hmm_model(all_history):
     try:
         hmm_model = hmm.GaussianHMM(n_components=2, covariance_type="diag", n_iter=100, random_state=42)
         hmm_model.fit(hmm_observations)
+        # **修正**: 檢查模型是否真的收斂並產生了必要的屬性
+        if not hasattr(hmm_model, 'emissionprob_'):
+            logging.error("HMM 模型訓練後未產生 'emissionprob_' 屬性，訓練可能失敗。")
+            return None
         joblib.dump(hmm_model, hmm_model_path)
         logging.info(f"HMM 模型已儲存至 {hmm_model_path}")
         return hmm_model
@@ -117,7 +122,6 @@ def train_models():
     logging.info("檢查並開始模型訓練...")
     os.makedirs(MODEL_DIR, exist_ok=True)
     
-    # 確保 history.json 存在
     if not os.path.exists(HISTORY_FILE):
         save_data(INITIAL_HISTORY_DATA)
 
