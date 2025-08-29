@@ -149,7 +149,8 @@ def train_hmm_model(all_history):
         return joblib.load(hmm_model_path)
 
     print("開始訓練 HMM 模型...")
-    hmm_observations_sequence = np.array([label_map[r] for r r in all_history if r in ['B', 'P']]).reshape(-1, 1)
+    # 修正語法錯誤：`for r r in all_history` 改為 `for r in all_history`
+    hmm_observations_sequence = np.array([label_map[r] for r in all_history if r in ['B', 'P']]).reshape(-1, 1)
 
     if hmm_observations_sequence.size < 10: # HMM 需要足夠的序列數據
         print("HMM 訓練數據不足 (至少需要10個莊閒結果)，跳過 HMM 訓練。")
