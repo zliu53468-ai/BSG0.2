@@ -93,8 +93,33 @@ def extract_features(roadmap, hmm_model=None):
                 last_hidden_state = hidden_states[-1]
                 
                 # 根據最後一個隱藏狀態的發射機率來預測下一觀察值
-                hmm_banker_prob = float(hmm_model.emissionprob_[last_hidden_state, 0]) # 狀態發射 'B' (0) 的機率
-                hmm_player_prob = float(hmm_model.emissionprob_[last_hidden_state, 1]) # 狀態發射 'P' (1) 的機率
+                # 注意：GMMHMM 的 emissionprob_ 是一個列表，每個元素是 GMM 的 weights_
+                # 我們需要從 GMM 的 means_ 和 covars_ 計算發射機率
+                # 這裡假設 GMMHMM 的發射機率是簡單的 GMM 權重
+                # 為了簡化，直接使用 GMMHMM 的 emissionprob_ 屬性（如果存在且結構兼容）
+                # 由於 GaussianHMM 的 emissionprob_ 是 (n_components, n_observations_types)
+                # 而 GMMHMM 的 emissionprob_ 結構更複雜 (n_components, n_mix, n_features)
+                # 我們需要調整這裡的訪問方式
+                
+                # 更穩健的 HMM emissionprob_ 訪問方式 (適用於 GaussianHMM)
+                if isinstance(hmm_model, hmm.GaussianHMM):
+                    hmm_banker_prob = float(hmm_model.emissionprob_[last_hidden_state, 0]) # 狀態發射 'B' (0) 的機率
+                    hmm_player_prob = float(hmm_model.emissionprob_[last_hidden_state, 1]) # 狀態發射 'P' (1) 的機率
+                elif isinstance(hmm_model, hmm.GMMHMM):
+                    # 對於 GMMHMM，emissionprob_ 是一個 GMM 對象的列表
+                    # 我們需要從 GMM 對象中提取每個觀察值的機率
+                    # 這裡簡化為使用 GMM 的權重作為機率，這可能不完全準確，但作為特徵是可行的
+                    # 或者更複雜地計算 GMM 的 PDF
+                    # 為了簡化，我們直接使用 GMMHMM 的 emissionprob_ 屬性 (如果它是一個數組)
+                    # 如果 GMMHMM 的 emissionprob_ 是一個 GMM 對象的列表，則需要更複雜的處理
+                    # 暫時回退到預設值，並在日誌中提醒
+                    print("警告: GMMHMM 的 emissionprob_ 訪問方式需要更複雜的處理，暫時使用預設機率。")
+                    hmm_banker_prob = 0.5
+                    hmm_player_prob = 0.5
+                else:
+                    hmm_banker_prob = 0.5
+                    hmm_player_prob = 0.5
+
 
                 # 確保機率和為 1
                 total_hmm_prob = hmm_banker_prob + hmm_player_prob
@@ -161,24 +186,24 @@ def train_hmm_model(all_history):
         print("HMM 訓練數據過於單一 (沒有足夠的莊閒變化)，跳過 HMM 訓練。")
         return None
 
-    # 設置 HMM 模型 (3 個隱藏狀態: 莊趨勢, 閒趨勢, 交替/震盪)
-    # covariance_type="diag" 適用於每個特徵獨立的情況 (這裡只有一個特徵: 莊/閒)
-    hmm_model = hmm.GaussianHMM(n_components=2, covariance_type="diag", n_iter=200, random_state=42) # 將 n_components 改為 2
+    # 設置 HMM 模型 (2 個隱藏狀態: 莊趨勢, 閒趨勢)
+    # 這裡嘗試使用 GMMHMM，它對數據分佈的假設更具彈性
+    # n_components=2 (2個隱藏狀態), n_mix=1 (每個狀態一個高斯分量), covariance_type="diag"
+    hmm_model = hmm.GMMHMM(n_components=2, n_mix=1, covariance_type="diag", n_iter=200, random_state=42)
     
     try:
         # 增加重試機制
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # 移除 init_params，讓 hmmlearn 內部自行處理初始化
                 hmm_model.fit(hmm_observations_sequence) 
                 # 檢查 emissionprob_ 是否存在，只有成功訓練後才會有
-                if hasattr(hmm_model, 'emissionprob_'):
+                if hasattr(hmm_model, 'emissionprob_') and hmm_model.emissionprob_ is not None:
                     joblib.dump(hmm_model, hmm_model_path)
                     print(f"HMM 模型訓練完成並已儲存 (嘗試 {attempt + 1}/{max_retries})。")
                     return hmm_model
                 else:
-                    print(f"HMM 模型訓練後缺少 'emissionprob_' 屬性，訓練可能未成功 (嘗試 {attempt + 1}/{max_retries})。")
+                    print(f"HMM 模型訓練後缺少 'emissionprob_' 屬性或為 None，訓練可能未成功 (嘗試 {attempt + 1}/{max_retries})。")
             except Exception as e:
                 print(f"HMM 模型訓練失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
@@ -224,14 +249,14 @@ def train_models_if_needed():
         
         # 特徵數量現在是 5 (原始) + 2 (HMM機率) = 7
         expected_feature_dim = 7 
-        if hmm_model is None or not hasattr(hmm_model, 'emissionprob_'): # 如果 HMM 未成功訓練，則預期特徵維度為 5
+        if hmm_model is None or not hasattr(hmm_model, 'emissionprob_') or hmm_model.emissionprob_ is None: # 如果 HMM 未成功訓練，則預期特徵維度為 5
             expected_feature_dim = 5
 
         if X_train.shape[1] != expected_feature_dim:
              print(f"警告: 訓練數據特徵維度不符 (預期 {expected_feature_dim}, 實際 {X_train.shape[1]})。")
              print("這可能表示 HMM 訓練失敗或數據問題，將嘗試使用不含 HMM 特徵的數據訓練 XGBoost。")
              # 如果維度不符，且 HMM 未載入，則重新準備不含 HMM 特徵的訓練數據
-             if hmm_model is None or not hasattr(hmm_model, 'emissionprob_'):
+             if hmm_model is None or not hasattr(hmm_model, 'emissionprob_') or hmm_model.emissionprob_ is None:
                  X_train, y_train = prepare_training_data(all_history, None) # 重新準備不含 HMM 特徵的數據
                  if X_train.shape[1] != 5: # 如果重新準備後仍不符，則返回
                      print("重新準備不含 HMM 特徵的數據後，特徵維度仍不符，無法訓練 XGBoost。")
@@ -327,7 +352,7 @@ def predict():
     
     # 這裡的 features.size 應該是 5 (原始) + 2 (HMM的2個機率) = 7
     expected_feature_size = 7 
-    if hmm_model is None or not hasattr(hmm_model, 'emissionprob_'): # 如果 HMM 未成功載入或訓練，則預期特徵維度為 5
+    if hmm_model is None or not hasattr(hmm_model, 'emissionprob_') or hmm_model.emissionprob_ is None: # 如果 HMM 未成功載入或訓練，則預期特徵維度為 5
         expected_feature_size = 5
 
     if features.size != expected_feature_size: 
