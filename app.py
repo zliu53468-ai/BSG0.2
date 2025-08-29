@@ -155,21 +155,35 @@ def train_hmm_model(all_history):
     if hmm_observations_sequence.size < 10: # HMM 需要足夠的序列數據
         print("HMM 訓練數據不足 (至少需要10個莊閒結果)，跳過 HMM 訓練。")
         return None
+    
+    # 檢查數據中是否至少有兩種不同的觀察值
+    if len(np.unique(hmm_observations_sequence)) < 2:
+        print("HMM 訓練數據過於單一 (沒有足夠的莊閒變化)，跳過 HMM 訓練。")
+        return None
 
     # 設置 HMM 模型 (3 個隱藏狀態: 莊趨勢, 閒趨勢, 交替/震盪)
     # covariance_type="diag" 適用於每個特徵獨立的情況 (這裡只有一個特徵: 莊/閒)
     hmm_model = hmm.GaussianHMM(n_components=2, covariance_type="diag", n_iter=200, random_state=42) # 將 n_components 改為 2
     
     try:
-        hmm_model.fit(hmm_observations_sequence)
-        # 檢查 emissionprob_ 是否存在，只有成功訓練後才會有
-        if hasattr(hmm_model, 'emissionprob_'):
-            joblib.dump(hmm_model, hmm_model_path)
-            print("HMM 模型訓練完成並已儲存。")
-            return hmm_model
-        else:
-            print("HMM 模型訓練後缺少 'emissionprob_' 屬性，訓練可能未成功。")
-            return None
+        # 增加重試機制
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                hmm_model.fit(hmm_observations_sequence)
+                # 檢查 emissionprob_ 是否存在，只有成功訓練後才會有
+                if hasattr(hmm_model, 'emissionprob_'):
+                    joblib.dump(hmm_model, hmm_model_path)
+                    print(f"HMM 模型訓練完成並已儲存 (嘗試 {attempt + 1}/{max_retries})。")
+                    return hmm_model
+                else:
+                    print(f"HMM 模型訓練後缺少 'emissionprob_' 屬性，訓練可能未成功 (嘗試 {attempt + 1}/{max_retries})。")
+            except Exception as e:
+                print(f"HMM 模型訓練失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                print("重試 HMM 模型訓練...")
+        print("HMM 模型多次訓練失敗。")
+        return None
     except Exception as e:
         print(f"HMM 模型訓練失敗: {e}")
         return None
@@ -209,13 +223,18 @@ def train_models_if_needed():
         
         # 特徵數量現在是 5 (原始) + 2 (HMM機率) = 7
         expected_feature_dim = 7 
+        if hmm_model is None: # 如果 HMM 未成功訓練，則預期特徵維度為 5
+            expected_feature_dim = 5
+
         if X_train.shape[1] != expected_feature_dim:
-             print(f"警告: 訓練數據特徵維度不符 (預期 {expected_feature_dim}, 實際 {X_train.shape[1]})，可能HMM訓練失敗。")
-             # 如果 HMM 訓練失敗，X_train 可能只有 5 個特徵，這會導致錯誤
-             # 這裡可以選擇重新訓練不含 HMM 特徵的模型，或者直接返回
-             # 為了簡化，如果維度不符，我們假設 HMM 特徵沒有成功加入，並調整預期維度
-             if hmm_model is None and X_train.shape[1] == 5:
-                 print("HMM 模型未載入，使用不含HMM特徵的訓練數據。")
+             print(f"警告: 訓練數據特徵維度不符 (預期 {expected_feature_dim}, 實際 {X_train.shape[1]})。")
+             print("這可能表示 HMM 訓練失敗或數據問題，將嘗試使用不含 HMM 特徵的數據訓練 XGBoost。")
+             # 如果維度不符，且 HMM 未載入，則重新準備不含 HMM 特徵的訓練數據
+             if hmm_model is None:
+                 X_train, y_train = prepare_training_data(all_history, None) # 重新準備不含 HMM 特徵的數據
+                 if X_train.shape[1] != 5: # 如果重新準備後仍不符，則返回
+                     print("重新準備不含 HMM 特徵的數據後，特徵維度仍不符，無法訓練 XGBoost。")
+                     return
              else:
                  print("訓練數據特徵維度錯誤，無法訓練 XGBoost。")
                  return
@@ -280,6 +299,10 @@ def predict():
 
     # 檢查所有模型檔案 (包括 HMM 和 XGBoost) 是否存在
     model_files = ['xgb_model.pkl', 'scaler.pkl', 'hmm_model.pkl']
+    # 如果 HMM 模型檔案不存在，則只檢查 XGBoost 和 scaler
+    if not os.path.exists(os.path.join(MODEL_DIR, 'hmm_model.pkl')):
+        model_files = ['xgb_model.pkl', 'scaler.pkl']
+    
     if not all(os.path.exists(os.path.join(MODEL_DIR, f)) for f in model_files):
         print("警告: 預測時發現部分模型檔案缺失，回傳預設機率。請檢查服務啟動日誌中的訓練過程。")
         return jsonify({
@@ -295,7 +318,10 @@ def predict():
     # 載入所有已訓練好的模型和 Scaler
     scaler = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
     xgb = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
-    hmm_model = joblib.load(os.path.join(MODEL_DIR, 'hmm_model.pkl'))
+    
+    hmm_model = None
+    if os.path.exists(os.path.join(MODEL_DIR, 'hmm_model.pkl')):
+        hmm_model = joblib.load(os.path.join(MODEL_DIR, 'hmm_model.pkl'))
 
     # 特徵轉換與預測
     # 這裡使用 `current_game_sequence_for_prediction` 來提取特徵，並包含 HMM 特徵
@@ -304,8 +330,11 @@ def predict():
     # 如果沒有足夠的有效歷史數據來提取特徵，可能導致錯誤
     # 這裡的 features.size 應該是 5 (原始) + 2 (HMM的2個機率) = 7
     expected_feature_size = 7 
+    if hmm_model is None or not hasattr(hmm_model, 'emissionprob_'): # 如果 HMM 未成功載入或訓練，則預期特徵維度為 5
+        expected_feature_size = 5
+
     if features.size != expected_feature_size: 
-        print(f"警告: 特徵數量不符 ({features.size} != {expected_feature_size})，回傳預設機率。")
+        print(f"警告: 特徵數量不符 (預期 {expected_feature_size}, 實際 {features.size})，回傳預設機率。")
         return jsonify({
             "banker": 0.5,
             "player": 0.5,
