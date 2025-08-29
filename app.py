@@ -39,11 +39,11 @@ def save_data(data):
     with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False)
 
-def extract_features(roadmap, hmm_model=None):
+def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
     """
     從路紙中提取特徵。
     特徵包括：莊/閒比例、連勝次數、連勝類型、前一局結果。
-    如果提供了 HMM 模型，則會額外提取 HMM 預測的下一局莊閒機率作為特徵。
+    如果 use_hmm_features 為 True 且提供了 HMM 模型，則會額外提取 HMM 預測的下一局莊閒機率作為特徵。
     """
     N = 20  # 考慮最近20局
     window = roadmap[-N:] if len(roadmap) >= N else roadmap[:]
@@ -74,13 +74,13 @@ def extract_features(roadmap, hmm_model=None):
 
     features = [b_ratio, p_ratio, streak, streak_type, prev]
 
-    # --- HMM 特徵提取 ---
+    # HMM 特徵提取
     hmm_banker_prob = 0.5
     hmm_player_prob = 0.5
     hmm_prediction = "等待"  # HMM 的獨立預測結果
 
-    # 只有當 HMM 模型存在且已成功訓練時才嘗試獲取 emissionprob_
-    if hmm_model and hasattr(hmm_model, 'emissionprob_') and len(roadmap) > 1:
+    # 只有當 use_hmm_features 為 True 且 HMM 模型存在時才提取 HMM 特徵
+    if use_hmm_features and hmm_model and hasattr(hmm_model, 'emissionprob_') and len(roadmap) > 1:
         try:
             # 準備 HMM 觀察序列 (只考慮 'B'/'P' 並轉換為數字)
             hmm_observations = np.array([label_map[r] for r in roadmap if r in ['B', 'P']]).reshape(-1, 1)
@@ -117,22 +117,24 @@ def extract_features(roadmap, hmm_model=None):
             hmm_player_prob = 0.5
             hmm_prediction = "等待"
     
-    features.extend([hmm_banker_prob, hmm_player_prob])
+    # 只有在使用 HMM 特徵時才添加它們
+    if use_hmm_features:
+        features.extend([hmm_banker_prob, hmm_player_prob])
     
     return np.array(features, dtype=np.float32), hmm_prediction
 
-def prepare_training_data(roadmap, hmm_model=None):
+def prepare_training_data(roadmap, hmm_model=None, use_hmm_features=False):
     """
     準備用於模型訓練的數據。
     將路紙轉換為特徵-標籤對。
-    如果提供了 HMM 模型，則會將 HMM 預測機率作為額外特徵。
+    如果 use_hmm_features 為 True 且提供了 HMM 模型，則會將 HMM 預測機率作為額外特徵。
     """
     filtered = [r for r in roadmap if r in ['B', 'P']]
     X = []
     y = []
     # 從第二局開始，用前 i 局的數據作為特徵，預測第 i 局的結果
     for i in range(1, len(filtered)):
-        current_features, _ = extract_features(filtered[:i], hmm_model)
+        current_features, _ = extract_features(filtered[:i], hmm_model, use_hmm_features)
         X.append(current_features)
         y.append(label_map[filtered[i]])
     return np.array(X, dtype=np.float32), np.array(y, dtype=np.int32)
@@ -140,13 +142,16 @@ def prepare_training_data(roadmap, hmm_model=None):
 def train_hmm_model(all_history):
     """
     訓練並儲存 HMM 模型。
-    使用 GaussianHMM 而不是 GMMHMM，因為我們的觀察值是離散的但需要轉換為連續值。
+    使用 GaussianHMM，因為我們的觀察值是連續的數值。
     """
     hmm_model_path = os.path.join(MODEL_DIR, 'hmm_model.pkl')
     if os.path.exists(hmm_model_path):
         print("HMM 模型檔案已存在，載入現有模型。")
-        return joblib.load(hmm_model_path)
-
+        try:
+            return joblib.load(hmm_model_path)
+        except:
+            print("載入現有 HMM 模型失敗，將重新訓練。")
+    
     print("開始訓練 HMM 模型...")
     
     # 準備觀察序列
@@ -162,7 +167,7 @@ def train_hmm_model(all_history):
         return None
     
     try:
-        # 使用 GaussianHMM 而不是 GMMHMM
+        # 使用 GaussianHMM
         # 設置 2 個隱藏狀態 (莊趨勢, 閒趨勢)
         hmm_model = hmm.GaussianHMM(
             n_components=2,
@@ -192,7 +197,6 @@ def train_hmm_model(all_history):
 def train_models_if_needed():
     """
     檢查模型檔案是否存在，若不存在則訓練並儲存模型。
-    現在會先訓練 HMM，然後將 HMM 的輸出作為特徵訓練 XGBoost。
     """
     print("開始檢查模型是否需要訓練...")
     
@@ -208,6 +212,7 @@ def train_models_if_needed():
 
     # 1. 訓練或載入 HMM 模型
     hmm_model = train_hmm_model(all_history)
+    use_hmm_features = hmm_model is not None and hasattr(hmm_model, 'emissionprob_')
     
     # 2. 檢查 XGBoost 模型是否需要訓練
     model_files = ['xgb_model.pkl', 'scaler.pkl']
@@ -217,7 +222,7 @@ def train_models_if_needed():
         print("偵測到模型檔案不存在，正在自動執行訓練...")
         
         # 準備訓練資料
-        X_train, y_train = prepare_training_data(all_history, hmm_model)
+        X_train, y_train = prepare_training_data(all_history, hmm_model, use_hmm_features)
         
         # 檢查訓練數據
         if len(X_train) == 0 or len(y_train) == 0:
@@ -225,15 +230,10 @@ def train_models_if_needed():
             return
         
         # 檢查特徵維度是否一致
-        expected_feature_dim = 7  # 5個基本特徵 + 2個HMM特徵
+        expected_feature_dim = 7 if use_hmm_features else 5
         if X_train.shape[1] != expected_feature_dim:
-            print(f"警告: 訓練數據特徵維度不符 (預期 {expected_feature_dim}, 實際 {X_train.shape[1]})。")
-            print("重新準備不含 HMM 特徵的訓練數據...")
-            X_train, y_train = prepare_training_data(all_history, None)
-            
-            if X_train.shape[1] != 5:  # 5個基本特徵
-                print("重新準備不含 HMM 特徵的數據後，特徵維度仍不符，無法訓練 XGBoost。")
-                return
+            print(f"錯誤: 訓練數據特徵維度不符 (預期 {expected_feature_dim}, 實際 {X_train.shape[1]})。無法訓練 XGBoost。")
+            return
         
         # 特徵縮放
         scaler = StandardScaler()
@@ -253,6 +253,13 @@ def train_models_if_needed():
         joblib.dump(xgb, os.path.join(MODEL_DIR, 'xgb_model.pkl'))
 
         print("XGBoost 模型訓練完成並已儲存。")
+        
+        # 儲存特徵使用情況
+        feature_info = {
+            'use_hmm_features': use_hmm_features,
+            'feature_dim': expected_feature_dim
+        }
+        joblib.dump(feature_info, os.path.join(MODEL_DIR, 'feature_info.pkl'))
     else:
         print("模型檔案已存在，無需重新訓練。")
 
@@ -309,17 +316,30 @@ def predict():
     scaler = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
     xgb = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
     
-    # 嘗試載入 HMM 模型
+    # 嘗試載入 HMM 模型和特徵信息
     hmm_model = None
+    use_hmm_features = False
     hmm_model_path = os.path.join(MODEL_DIR, 'hmm_model.pkl')
+    feature_info_path = os.path.join(MODEL_DIR, 'feature_info.pkl')
+    
     if os.path.exists(hmm_model_path):
-        hmm_model = joblib.load(hmm_model_path)
+        try:
+            hmm_model = joblib.load(hmm_model_path)
+        except:
+            print("載入 HMM 模型失敗。")
+    
+    if os.path.exists(feature_info_path):
+        try:
+            feature_info = joblib.load(feature_info_path)
+            use_hmm_features = feature_info.get('use_hmm_features', False)
+        except:
+            print("載入特徵信息失敗。")
 
     # 特徵轉換與預測
-    features, hmm_prediction = extract_features(current_game_sequence, hmm_model)
+    features, hmm_prediction = extract_features(current_game_sequence, hmm_model, use_hmm_features)
     
     # 檢查特徵維度
-    expected_feature_size = 7  # 5個基本特徵 + 2個HMM特徵
+    expected_feature_size = 7 if use_hmm_features else 5
     if len(features) != expected_feature_size:
         print(f"警告: 特徵數量不符 (預期 {expected_feature_size}, 實際 {len(features)})，回傳預設機率。")
         return jsonify({
