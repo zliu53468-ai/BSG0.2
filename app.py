@@ -80,7 +80,8 @@ def extract_features(roadmap, hmm_model=None):
     hmm_player_prob = 0.5
     hmm_prediction = "等待" # HMM 的獨立預測結果
 
-    if hmm_model and len(roadmap) > 1: # HMM 至少需要兩個觀察值才能預測轉換
+    # 只有當 HMM 模型存在且已成功訓練時才嘗試獲取 emissionprob_
+    if hmm_model and hasattr(hmm_model, 'emissionprob_') and len(roadmap) > 1: # HMM 至少需要兩個觀察值才能預測轉換
         # 準備 HMM 觀察序列 (只考慮 'B'/'P' 並轉換為數字)
         hmm_observations_for_prediction = np.array([label_map[r] for r in roadmap if r in ['B', 'P']]).reshape(-1, 1)
         
@@ -149,7 +150,6 @@ def train_hmm_model(all_history):
         return joblib.load(hmm_model_path)
 
     print("開始訓練 HMM 模型...")
-    # 修正語法錯誤：`for r r in all_history` 改為 `for r in all_history`
     hmm_observations_sequence = np.array([label_map[r] for r in all_history if r in ['B', 'P']]).reshape(-1, 1)
 
     if hmm_observations_sequence.size < 10: # HMM 需要足夠的序列數據
@@ -162,9 +162,14 @@ def train_hmm_model(all_history):
     
     try:
         hmm_model.fit(hmm_observations_sequence)
-        joblib.dump(hmm_model, hmm_model_path)
-        print("HMM 模型訓練完成並已儲存。")
-        return hmm_model
+        # 檢查 emissionprob_ 是否存在，只有成功訓練後才會有
+        if hasattr(hmm_model, 'emissionprob_'):
+            joblib.dump(hmm_model, hmm_model_path)
+            print("HMM 模型訓練完成並已儲存。")
+            return hmm_model
+        else:
+            print("HMM 模型訓練後缺少 'emissionprob_' 屬性，訓練可能未成功。")
+            return None
     except Exception as e:
         print(f"HMM 模型訓練失敗: {e}")
         return None
