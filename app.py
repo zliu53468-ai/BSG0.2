@@ -1,62 +1,69 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
+# 移除或註解掉以下兩行
+# from flask_limiter import Limiter
+# from flask_limiter.util import get_remote_address
+# from flask_caching import Cache
 import logging
+from logging.handlers import RotatingFileHandler
 
 app = Flask(__name__)
-# 讓日誌直接輸出到控制台，由 Render 平台收集
-logging.basicConfig(level=logging.INFO)
+CORS(app)  # 處理跨域請求
 
-# 處理跨域請求
-CORS(app)
+# 註解掉 Limiter 和 Cache 相關代碼
+# limiter = Limiter(
+#     app,
+#     key_func=get_remote_address,
+#     default_limits=["200 per day", "50 per hour"]
+# )
 
-# 設置頻率限制 (限制來自同一個 IP 的請求)
-limiter = Limiter(
-    app,
-    key_func=get_remote_address,
-    default_limits=["500 per day", "100 per hour"]
-)
+# cache = Cache(app, config={'CACHE_TYPE': 'simple'})
 
-# 注意：在免費的雲端平台上，簡單的記憶體快取和變數會在服務休眠後重置。
-# 這裡保留基本架構，但要知道數據不是永久性的。
+# 設置日誌
+log_handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=1)
+log_handler.setLevel(logging.INFO)
+app.logger.addHandler(log_handler)
+
+# 存儲歷史數據
 historical_data = []
 
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"status": "success", "message": "AI Engine is running."})
-
 @app.route('/predict', methods=['POST'])
-@limiter.limit("20 per minute") # 限制每分鐘最多 20 次請求
+# 移除裝飾器
+# @limiter.limit("10 per minute")
+# @cache.cached(timeout=60)
 def predict():
     try:
         data = request.get_json()
         
-        if not data or 'roadmap' not in data:
-            return jsonify({"error": "無效的請求，缺少 'roadmap' 數據"}), 400
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
         
-        roadmap = data['roadmap']
+        # 檢查數據是否與歷史數據相同
+        if is_data_identical(data, historical_data):
+            app.logger.info("收到的路紙與現有歷史數據一致，使用快取結果。")
+            # 返回快取結果
+            return jsonify({"result": "cached_prediction", "status": "unchanged"})
         
-        # 這裡應該放入您完整的 AI 預測邏輯
-        # make_prediction(roadmap)
-        # 為了演示，我們先回傳一個簡單的結果
-        prediction = {
-            "banker": 0.55,
-            "player": 0.40,
-            "tie": 0.05,
-            "details": {
-                "analysis": "這是一個示範回應"
-            }
-        }
+        # 更新歷史數據
+        historical_data.clear()
+        historical_data.extend(data)
         
-        app.logger.info(f"成功預測，路紙長度: {len(roadmap)}")
+        # 進行預測
+        prediction = make_prediction(data)
         
-        return jsonify(prediction)
+        return jsonify({"result": prediction, "status": "new_prediction"})
         
     except Exception as e:
         app.logger.error(f"Prediction error: {str(e)}")
-        return jsonify({"error": "伺服器內部錯誤"}), 500
+        return jsonify({"error": "Internal server error"}), 500
+
+def is_data_identical(new_data, existing_data):
+    # 實現數據比較邏輯
+    return new_data == existing_data
+
+def make_prediction(data):
+    # 實現您的預測邏輯
+    return "prediction_result"
 
 if __name__ == '__main__':
-    # 這個區塊僅供本地測試，在 Render 上會由 gunicorn 啟動
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    app.run(debug=True)
