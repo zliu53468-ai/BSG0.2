@@ -32,7 +32,10 @@ def load_data():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
-    return []
+    # 如果檔案不存在，則寫入初始數據
+    print("歷史數據檔案不存在，寫入初始數據。")
+    save_data(INITIAL_HISTORY_DATA)
+    return INITIAL_HISTORY_DATA
 
 def save_data(data):
     """將數據儲存到檔案"""
@@ -78,7 +81,6 @@ def prepare_training_data(roadmap):
     準備用於模型訓練的數據。
     將路紙轉換為特徵-標籤對。
     """
-    # 修正語法錯誤：`r r in roadmap` 改為 `r in roadmap`
     filtered = [r for r in roadmap if r in ['B', 'P']]
     X = []
     y = []
@@ -89,46 +91,60 @@ def prepare_training_data(roadmap):
         y.append(label_map[filtered[i]])
     return np.array(X, dtype=np.float32), np.array(y, dtype=np.int32)
 
-def train_models():
+def train_models_if_needed():
     """
-    這個函式用於離線訓練，請手動或透過排程執行。
-    它會讀取所有歷史數據，重新訓練模型並儲存。
+    檢查模型檔案是否存在，若不存在則訓練並儲存模型。
     """
-    print("開始訓練模型...")
-    all_history = load_data()
-    if not all_history:
-        print("沒有足夠的歷史數據來訓練模型。")
-        return
+    print("開始檢查模型是否需要訓練...")
+    model_files = ['sgd_model.pkl', 'xgb_model.pkl', 'lgbm_model.pkl', 'scaler.pkl']
+    all_models_exist = all(os.path.exists(os.path.join(MODEL_DIR, f)) for f in model_files)
 
-    # 準備訓練資料
-    X_train, y_train = prepare_training_data(all_history)
-    
-    if len(X_train) < 5 or len(np.unique(y_train)) < 2:
-        print("訓練資料不足或不平衡，無法進行訓練。")
-        return
+    if not all_models_exist:
+        print("偵測到模型檔案不存在，正在自動執行首次訓練...")
+        # 確保模型資料夾存在
+        if not os.path.exists(MODEL_DIR):
+            os.makedirs(MODEL_DIR)
 
-    # 特徵縮放
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_train)
-    joblib.dump(scaler, os.path.join(MODEL_DIR, 'scaler.pkl'))
+        all_history = load_data() # 確保在訓練前載入所有歷史數據
+        if not all_history:
+            print("沒有足夠的歷史數據來訓練模型。")
+            return
 
-    # 訓練與儲存模型
-    sgd = SGDClassifier(loss='log_loss', max_iter=2000, tol=1e-4, 
-                        learning_rate='adaptive', eta0=0.01, penalty='l2', random_state=42)
-    sgd.fit(X_scaled, y_train)
-    joblib.dump(sgd, os.path.join(MODEL_DIR, 'sgd_model.pkl'))
+        # 準備訓練資料
+        X_train, y_train = prepare_training_data(all_history)
+        
+        if len(X_train) < 5 or len(np.unique(y_train)) < 2:
+            print("訓練資料不足或不平衡，無法進行訓練。")
+            return
 
-    xgb = XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric='logloss',
-                        learning_rate=0.1, max_depth=3, random_state=42)
-    xgb.fit(X_scaled, y_train)
-    joblib.dump(xgb, os.path.join(MODEL_DIR, 'xgb_model.pkl'))
+        # 特徵縮放
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_train)
+        joblib.dump(scaler, os.path.join(MODEL_DIR, 'scaler.pkl'))
 
-    lgbm = LGBMClassifier(n_estimators=100, learning_rate=0.05, num_leaves=20,
-                          max_depth=5, random_state=42)
-    lgbm.fit(X_scaled, y_train)
-    joblib.dump(lgbm, os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
+        # 訓練與儲存模型
+        sgd = SGDClassifier(loss='log_loss', max_iter=2000, tol=1e-4, 
+                            learning_rate='adaptive', eta0=0.01, penalty='l2', random_state=42)
+        sgd.fit(X_scaled, y_train)
+        joblib.dump(sgd, os.path.join(MODEL_DIR, 'sgd_model.pkl'))
 
-    print("模型訓練完成並已儲存。")
+        xgb = XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric='logloss',
+                            learning_rate=0.1, max_depth=3, random_state=42)
+        xgb.fit(X_scaled, y_train)
+        joblib.dump(xgb, os.path.join(MODEL_DIR, 'xgb_model.pkl'))
+
+        lgbm = LGBMClassifier(n_estimators=100, learning_rate=0.05, num_leaves=20,
+                              max_depth=5, random_state=42)
+        lgbm.fit(X_scaled, y_train)
+        joblib.dump(lgbm, os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
+
+        print("模型訓練完成並已儲存。")
+    else:
+        print("模型檔案已存在，無需重新訓練。")
+
+
+# 在應用程式啟動時立即執行模型檢查和訓練
+train_models_if_needed()
 
 
 @app.route("/", methods=["GET"])
@@ -151,7 +167,7 @@ def predict():
     # 過濾出有效的莊閒和結果，只保留 'B', 'P', 'T'
     filtered_received_roadmap = [r for r in received_roadmap if r in ["B", "P", "T"]]
 
-    # --- 修正後的數據保存邏輯 ---
+    # --- 數據保存邏輯 ---
     # 假設 filtered_received_roadmap 是前端傳來「最新且完整」的遊戲歷史。
     # 後端將直接使用此數據作為最新的歷史記錄。
     current_history_from_file = load_data()
@@ -168,15 +184,16 @@ def predict():
     current_game_sequence_for_prediction = [r for r in filtered_received_roadmap if r in ["B", "P"]]
 
 
-    # 檢查是否有已訓練好的模型
+    # 檢查是否有已訓練好的模型 (此處為運行時檢查，主要用於防止訓練失敗導致的錯誤)
     model_files = ['sgd_model.pkl', 'xgb_model.pkl', 'lgbm_model.pkl', 'scaler.pkl']
     if not all(os.path.exists(os.path.join(MODEL_DIR, f)) for f in model_files):
+        print("警告: 預測時發現模型檔案缺失，回傳預設機率。請檢查服務啟動日誌中的訓練過程。")
         return jsonify({
             "banker": 0.5,
             "player": 0.5,
             "tie": 0.05,
             "details": {
-                "suggestion": "請先執行模型訓練任務。"
+                "suggestion": "請先執行模型訓練任務。" # 此處提示前端，但實際已嘗試在啟動時訓練
             }
         })
     
@@ -189,6 +206,18 @@ def predict():
     # 特徵轉換與預測
     # 這裡使用 `current_game_sequence_for_prediction` 來提取特徵
     features = extract_features(current_game_sequence_for_prediction).reshape(1, -1)
+    # 如果沒有足夠的有效歷史數據來提取特徵，可能導致錯誤
+    if features.size == 0:
+        print("警告: 沒有足夠的莊閒結果來提取特徵，回傳預設機率。")
+        return jsonify({
+            "banker": 0.5,
+            "player": 0.5,
+            "tie": 0.05,
+            "details": {
+                "suggestion": "請輸入更多莊閒結果以進行預測。"
+            }
+        })
+
     features_scaled = scaler.transform(features)
 
     sgd_pred_prob = sgd.predict_proba(features_scaled)[0]
@@ -214,7 +243,6 @@ def predict():
                    lgb_pred_prob[1] * weight_lgbm) / total_weights
     
     # 假定和局機率，可以根據歷史數據調整
-    # 如果未來需要 HMM 預測，這裡可以考慮如何將 HMM 的輸出與其他模型整合
     tie = 0.05 
     
     # 綜合建議
@@ -237,22 +265,6 @@ def predict():
         }
     })
 
+# 原有的 `if __name__ == "__main__":` 區塊已簡化，僅用於本地開發測試
 if __name__ == "__main__":
-    # 在第一次啟動時，自動檢查並初始化數據與訓練
-    # 確保模型資料夾存在
-    if not os.path.exists(MODEL_DIR):
-        os.makedirs(MODEL_DIR)
-
-    if not os.path.exists(HISTORY_FILE):
-        print("首次啟動：偵測到沒有歷史數據檔案，正在自動建立並寫入初始數據...")
-        save_data(INITIAL_HISTORY_DATA)
-        print("初始數據寫入完成。")
-
-    # 只有在所有模型檔案都不存在時才進行訓練
-    model_files = ['sgd_model.pkl', 'xgb_model.pkl', 'lgbm_model.pkl', 'scaler.pkl']
-    if not all(os.path.exists(os.path.join(MODEL_DIR, f)) for f in model_files):
-        print("偵測到模型檔案不存在，正在自動執行首次訓練...")
-        train_models()
-        print("首次訓練完成。")
-    
     app.run(host="0.0.0.0", port=8000, debug=False)
