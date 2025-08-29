@@ -87,18 +87,13 @@ def extract_features(roadmap, hmm_model=None):
         if hmm_observations_for_prediction.size > 0:
             try:
                 # 獲取當前序列最可能的隱藏狀態
-                # 注意: hmmlearn 的 predict_proba 是預測每個時間點的狀態機率
-                # 我們需要的是下一觀察值的機率
-                # 這裡我們利用當前最可能的狀態，結合 emissionprob_ 和 transmat_ 來推斷
-                
-                # 獲取當前序列的狀態機率 (最後一個時間點)
                 # 使用 `predict` 找到最可能的隱藏狀態序列
                 hidden_states = hmm_model.predict(hmm_observations_for_prediction)
                 last_hidden_state = hidden_states[-1]
                 
                 # 根據最後一個隱藏狀態的發射機率來預測下一觀察值
-                hmm_banker_prob = hmm_model.emissionprob_[last_hidden_state, 0] # 狀態發射 'B' (0) 的機率
-                hmm_player_prob = hmm_model.emissionprob_[last_hidden_state, 1] # 狀態發射 'P' (1) 的機率
+                hmm_banker_prob = float(hmm_model.emissionprob_[last_hidden_state, 0]) # 狀態發射 'B' (0) 的機率
+                hmm_player_prob = float(hmm_model.emissionprob_[last_hidden_state, 1]) # 狀態發射 'P' (1) 的機率
 
                 # 確保機率和為 1
                 total_hmm_prob = hmm_banker_prob + hmm_player_prob
@@ -154,7 +149,7 @@ def train_hmm_model(all_history):
         return joblib.load(hmm_model_path)
 
     print("開始訓練 HMM 模型...")
-    hmm_observations_sequence = np.array([label_map[r] for r in all_history if r in ['B', 'P']]).reshape(-1, 1)
+    hmm_observations_sequence = np.array([label_map[r] for r r in all_history if r in ['B', 'P']]).reshape(-1, 1)
 
     if hmm_observations_sequence.size < 10: # HMM 需要足夠的序列數據
         print("HMM 訓練數據不足 (至少需要10個莊閒結果)，跳過 HMM 訓練。")
@@ -337,11 +332,11 @@ def predict():
         suggestion = "等待"
 
     return jsonify({
-        "banker": round(banker_prob, 3),
-        "player": round(player_prob, 3),
-        "tie": round(tie, 3),
+        "banker": float(round(banker_prob, 3)), # 轉換為標準 Python float
+        "player": float(round(player_prob, 3)), # 轉換為標準 Python float
+        "tie": float(round(tie, 3)),           # 轉換為標準 Python float
         "details": {
-            "xgb": f"{xgb_pred} ({xgb_pred_prob[np.argmax(xgb_pred_prob)]:.2f})",
+            "xgb": f"{xgb_pred} ({float(xgb_pred_prob[np.argmax(xgb_pred_prob)]):.2f})", # 轉換為標準 Python float
             "hmm": hmm_prediction, # HMM 的獨立預測結果
             "suggestion": suggestion
         }
