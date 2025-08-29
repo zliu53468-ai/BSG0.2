@@ -1,134 +1,334 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import os
+import json
 import logging
 from logging.handlers import RotatingFileHandler
-import os
+import numpy as np
+import joblib
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
+from hmmlearn import hmm
+
+# =============================================================================
+# Flask 應用程式與日誌設定
+# =============================================================================
 
 app = Flask(__name__)
 
-# 更完善的 CORS 配置
-CORS(app, resources={
-    r"/*": {
-        "origins": ["http://localhost:3000", "https://your-frontend-domain.com"],  # 替換為您的前端域名
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-})
-
-# 設置日誌
+# 設定日誌
 if not os.path.exists('logs'):
     os.makedirs('logs')
 
-log_handler = RotatingFileHandler('logs/app.log', maxBytes=10000, backupCount=3)
+# 建立日誌處理器，設定日誌檔案、大小與備份數量
+log_handler = RotatingFileHandler('logs/app.log', maxBytes=10240, backupCount=5)
 log_handler.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]')
+
+# 設定日誌格式
+formatter = logging.Formatter(
+    '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+)
 log_handler.setFormatter(formatter)
+
+# 將日誌處理器加入 Flask app
 app.logger.addHandler(log_handler)
 app.logger.setLevel(logging.INFO)
 
-# 存儲歷史數據
-historical_data = []
+# 移除預設的日誌處理器，避免重複輸出
+app.logger.removeHandler(app.logger.handlers[0])
 
-# 添加根路徑路由
-@app.route('/')
+# 設定 CORS，更安全地指定來源
+CORS(app, resources={r"/*": {"origins": "*"}}) # 允許所有來源，可替換為您的前端網域
+
+# =============================================================================
+# 全域變數與設定
+# =============================================================================
+
+HISTORY_FILE = 'history.json'
+MODEL_DIR = 'models'
+LABEL_MAP = {'B': 0, 'P': 1}
+REVERSE_MAP = {0: '莊', 1: '閒'}
+
+# 初始歷史數據 (如果 history.json 不存在)
+INITIAL_HISTORY_DATA = [
+    "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P", "B", "B", "P", "B", "B", "P", "T", "T", "B", "P", "B", "B", "B", "B", "B", "P", "P", "B", "P", "B", "B", "P", "P", "P", "P", "P", "P", "B", "B", "T", "B", "T", "B", "P", "P", "P", "B", "P", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "B", "P", "B", "P", "B", "B", "P", "B", "P", "T", "T", "B", "B", "B", "B", "P", "B", "B", "B", "P", "B", "T", "P", "P", "B", "B", "B", "P", "P", "P", "B", "P", "B", "P", "P", "P", "B", "T", "B", "P", "B", "T", "B", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "B", "T", "T", "B", "P", "B", "B", "P", "P", "P", "B", "P", "B", "T", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "B", "P", "T", "B", "P", "T", "B", "B", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "B", "B", "P", "B", "P", "B", "T", "B", "B", "P", "P", "B", "B", "P", "T", "P", "P", "B", "P", "B", "B", "B", "B", "P", "B", "P", "B", "B", "T", "P", "B", "P", "B", "T", "T", "B", "P", "P", "B", "P", "P", "B", "B", "P", "B", "P", "T", "P", "P", "P", "P", "B", "B", "B", "B", "B", "P", "B", "P", "B", "P", "B", "B", "P", "B", "P", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "B", "P", "B", "P", "B", "P", "T", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "P", "P", "B", "B", "P", "B", "T", "B", "T", "B", "P", "B", "P", "T", "P", "B", "B", "P", "P", "P", "B", "P", "B", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "B", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "P", "P", "B", "P", "P", "P", "P", "P", "B", "P", "P", "B", "P", "B", "B", "P", "T", "B", "P", "B", "P", "P", "T", "P", "B", "B", "T", "B", "P", "T", "P", "B", "P", "B", "B", "P", "B", "B", "T", "P", "P", "P", "P", "T", "P", "T", "B", "B", "P", "B", "B", "P", "P", "P", "B", "P", "B", "P", "T", "P", "P", "T", "P", "P", "B", "P", "P", "B", "P", "P", "B", "P", "P", "T", "B", "P", "B", "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "T", "T", "B", "P", "B", "B", "B", "T", "T", "B", "B", "P", "B", "T", "P", "B", "P", "B", "P", "P", "P", "B", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", "P", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "B", "B", "B", "P", "B", "T", "T", "P", "B", "B", "B", "P", "B", "B", "P", "B", "P", "B", "P", "P", "P", "P", "P", "P", "B", "B", "B", "P", "T", "P", "B", "T", "B", "B", "B", "B", "T", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "B", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "B", "B", "B", "T", "B", "B", "P", "B", "P", "T", "P", "B", "B", "P", "B", "B", "B", "P", "P", "P", "B", "P", "P", "B", "P", "P", "B", "B", "P", "P", "B", "P", "B", "B", "B", "B", "B", "B", "B", "B", "P", "T", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", "P", "P", "T", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "P", "B", "T", "P", "B", "B", "P", "B", "P", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "T", "P", "P", "B", "T", "B", "P", "P", "P", "B", "B", "P", "B", "B", "P", "B", "P", "P", "B", "B", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
+]
+
+# =============================================================================
+# 數據處理函式
+# =============================================================================
+
+def load_data():
+    """從檔案載入歷史數據，若檔案不存在則使用初始數據。"""
+    try:
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        else:
+            app.logger.info(f"歷史數據檔案 '{HISTORY_FILE}' 不存在，寫入初始數據。")
+            save_data(INITIAL_HISTORY_DATA)
+            return INITIAL_HISTORY_DATA
+    except Exception as e:
+        app.logger.error(f"讀取歷史數據失敗: {e}", exc_info=True)
+        return INITIAL_HISTORY_DATA # 發生錯誤時回傳初始數據以確保程式繼續運行
+
+def save_data(data):
+    """將數據儲存到檔案。"""
+    try:
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        app.logger.error(f"儲存歷史數據失敗: {e}", exc_info=True)
+
+# =============================================================================
+# 特徵工程函式
+# =============================================================================
+
+def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
+    """從路紙中提取特徵，可選擇性加入 HMM 預測機率。"""
+    # 考慮最近 N 局
+    N = 20
+    window = roadmap[-N:]
+
+    b_count = window.count('B')
+    p_count = window.count('P')
+    total = b_count + p_count
+
+    b_ratio = b_count / total if total > 0 else 0.5
+    p_ratio = p_count / total if total > 0 else 0.5
+
+    # 計算連勝
+    streak = 0
+    last_result = None
+    for item in reversed(window):
+        if item in ['B', 'P']:
+            if last_result is None:
+                last_result = item
+                streak = 1
+            elif item == last_result:
+                streak += 1
+            else:
+                break
+    
+    streak_type = LABEL_MAP.get(last_result, -1) # B=0, P=1, None=-1
+    prev_result = LABEL_MAP.get(window[-1], -1) if window else -1
+
+    features = [b_ratio, p_ratio, streak, streak_type, prev_result]
+    hmm_prediction = "等待"
+
+    # HMM 特徵提取
+    if use_hmm_features and hmm_model and len(roadmap) > 1:
+        try:
+            hmm_observations = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
+            if len(hmm_observations) > 1:
+                hidden_states = hmm_model.predict(hmm_observations)
+                last_hidden_state = hidden_states[-1]
+                
+                emission_probs = hmm_model.emissionprob_[last_hidden_state]
+                hmm_banker_prob = emission_probs[LABEL_MAP['B']]
+                hmm_player_prob = emission_probs[LABEL_MAP['P']]
+                
+                # 歸一化
+                total_prob = hmm_banker_prob + hmm_player_prob
+                if total_prob > 0:
+                    hmm_banker_prob /= total_prob
+                    hmm_player_prob /= total_prob
+
+                features.extend([hmm_banker_prob, hmm_player_prob])
+                hmm_prediction = "莊" if hmm_banker_prob > hmm_player_prob else "閒"
+            else:
+                 features.extend([0.5, 0.5]) # 數據不足時給予預設值
+        except Exception as e:
+            app.logger.warning(f"HMM 特徵提取失敗: {e}. 使用預設機率。")
+            features.extend([0.5, 0.5]) # 發生錯誤時補上預設值，避免維度不符
+    
+    return np.array(features, dtype=np.float32), hmm_prediction
+
+def prepare_training_data(roadmap, hmm_model=None, use_hmm_features=False):
+    """準備用於模型訓練的特徵-標籤對。"""
+    filtered = [r for r in roadmap if r in LABEL_MAP]
+    X, y = [], []
+    for i in range(1, len(filtered)):
+        # 提取到第 i-1 局的特徵
+        current_features, _ = extract_features(filtered[:i], hmm_model, use_hmm_features)
+        X.append(current_features)
+        # 第 i 局的結果作為標籤
+        y.append(LABEL_MAP[filtered[i]])
+    return np.array(X, dtype=np.float32), np.array(y, dtype=np.int32)
+
+# =============================================================================
+# 模型訓練函式
+# =============================================================================
+
+def train_hmm_model(all_history):
+    """訓練並儲存 HMM 模型。"""
+    hmm_model_path = os.path.join(MODEL_DIR, 'hmm_model.pkl')
+    if os.path.exists(hmm_model_path):
+        try:
+            app.logger.info("HMM 模型已存在，載入現有模型。")
+            return joblib.load(hmm_model_path)
+        except Exception as e:
+            app.logger.error(f"載入現有 HMM 模型失敗: {e}，將重新訓練。")
+
+    app.logger.info("開始訓練 HMM 模型...")
+    hmm_observations = np.array([LABEL_MAP[r] for r in all_history if r in LABEL_MAP]).reshape(-1, 1)
+
+    if len(hmm_observations) < 20 or len(np.unique(hmm_observations)) < 2:
+        app.logger.warning("HMM 訓練數據不足或缺乏多樣性，跳過 HMM 訓練。")
+        return None
+
+    try:
+        hmm_model = hmm.GaussianHMM(n_components=2, covariance_type="diag", n_iter=100, random_state=42)
+        hmm_model.fit(hmm_observations)
+        
+        if hasattr(hmm_model, 'monitor_') and not hmm_model.monitor_.converged:
+            app.logger.warning("HMM 模型訓練完成但可能未收斂。")
+        else:
+             app.logger.info("HMM 模型訓練成功。")
+
+        joblib.dump(hmm_model, hmm_model_path)
+        app.logger.info(f"HMM 模型已儲存至 {hmm_model_path}")
+        return hmm_model
+    except Exception as e:
+        app.logger.error(f"HMM 模型訓練失敗: {e}", exc_info=True)
+        return None
+
+def train_models_if_needed():
+    """應用程式啟動時，檢查並訓練必要的模型。"""
+    app.logger.info("檢查模型是否需要訓練...")
+    os.makedirs(MODEL_DIR, exist_ok=True)
+
+    all_history = load_data()
+    if not all_history:
+        app.logger.error("無法載入歷史數據，無法訓練模型。")
+        return
+
+    # 1. 訓練或載入 HMM 模型
+    hmm_model = train_hmm_model(all_history)
+    use_hmm_features = hmm_model is not None
+
+    # 2. 檢查 XGBoost 模型是否需要訓練
+    xgb_model_path = os.path.join(MODEL_DIR, 'xgb_model.pkl')
+    if not os.path.exists(xgb_model_path):
+        app.logger.info("XGBoost 模型不存在，開始訓練...")
+        X_train, y_train = prepare_training_data(all_history, hmm_model, use_hmm_features)
+
+        if X_train.shape[0] < 10:
+            app.logger.error("訓練數據不足，無法訓練 XGBoost 模型。")
+            return
+        
+        # 特徵縮放
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_train)
+        joblib.dump(scaler, os.path.join(MODEL_DIR, 'scaler.pkl'))
+
+        # 訓練 XGBoost
+        xgb = XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric='logloss', random_state=42)
+        xgb.fit(X_scaled, y_train)
+        joblib.dump(xgb, xgb_model_path)
+        app.logger.info(f"XGBoost 模型訓練完成並儲存至 {xgb_model_path}")
+
+        # 儲存特徵使用資訊，供預測時參考
+        feature_info = {'use_hmm_features': use_hmm_features}
+        joblib.dump(feature_info, os.path.join(MODEL_DIR, 'feature_info.pkl'))
+    else:
+        app.logger.info("所有模型檔案均已存在，無需重新訓練。")
+
+# =============================================================================
+# Flask 路由 (API Endpoints)
+# =============================================================================
+
+@app.route("/", methods=["GET"])
 def home():
-    app.logger.info("根路徑被訪問")
+    """根路由：提供服務狀態訊息。"""
     return jsonify({
-        "message": "預測服務已啟動",
-        "endpoints": {
-            "predict": "/predict (POST)"
-        },
-        "status": "active"
+        "status": "online",
+        "message": "Baccarat AI Prediction Engine is running."
     })
 
-# 健康檢查端點
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "timestamp": "2025-08-29T07:00:00Z"})
+    """健康檢查路由"""
+    return jsonify({"status": "healthy"})
 
-# 處理 OPTIONS 請求（CORS 預檢請求）
-@app.route('/predict', methods=['OPTIONS'])
-def handle_options():
-    app.logger.info("處理 OPTIONS 請求")
-    response = jsonify({"status": "ok"})
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    return response
-
-@app.route('/predict', methods=['POST'])
+@app.route("/predict", methods=["POST"])
 def predict():
+    """預測路由：接收路紙數據，回傳預測機率。"""
     try:
-        app.logger.info("收到預測請求")
-        
-        # 記錄請求頭部信息
-        app.logger.info(f"請求頭: {dict(request.headers)}")
-        
-        # 檢查是否為預檢請求
-        if request.method == 'OPTIONS':
-            return handle_options()
-            
-        # 獲取 JSON 數據
-        if not request.is_json:
-            app.logger.warning("請求不是 JSON 格式")
-            return jsonify({"error": "請求必須是 JSON 格式"}), 400
-            
         data = request.get_json()
-        app.logger.info(f"收到數據: {data}")
-        
-        if not data:
-            app.logger.warning("未提供數據")
-            return jsonify({"error": "未提供數據"}), 400
-        
-        # 檢查數據是否與歷史數據相同
-        if is_data_identical(data, historical_data):
-            app.logger.info("收到的路紙與現有歷史數據一致，使用快取結果。")
-            return jsonify({
-                "result": "cached_prediction", 
-                "status": "unchanged",
-                "timestamp": "2025-08-29T07:00:00Z"
-            })
+        if not data or "roadmap" not in data:
+            return jsonify({"error": "無效的請求，缺少 'roadmap' 欄位。"}), 400
+
+        received_roadmap = [r for r in data["roadmap"] if r in ["B", "P", "T"]]
         
         # 更新歷史數據
-        historical_data.clear()
-        historical_data.extend(data)
+        current_history = load_data()
+        if received_roadmap != current_history:
+            save_data(received_roadmap)
+            app.logger.info(f"歷史數據已更新，新數據長度: {len(received_roadmap)}")
+
+        # 載入模型
+        scaler = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
+        xgb = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
+        feature_info = joblib.load(os.path.join(MODEL_DIR, 'feature_info.pkl'))
+        use_hmm_features = feature_info.get('use_hmm_features', False)
         
+        hmm_model = None
+        if use_hmm_features:
+            hmm_model = joblib.load(os.path.join(MODEL_DIR, 'hmm_model.pkl'))
+
+        # 提取特徵
+        features, hmm_prediction = extract_features(received_roadmap, hmm_model, use_hmm_features)
+        
+        # 檢查特徵維度是否與訓練時一致
+        expected_dim = scaler.n_features_in_
+        if features.shape[0] != expected_dim:
+            msg = f"特徵維度不符 (預期 {expected_dim}, 實際 {features.shape[0]})"
+            app.logger.error(msg)
+            return jsonify({"error": msg}), 500
+
         # 進行預測
-        prediction = make_prediction(data)
-        app.logger.info(f"生成預測結果: {prediction}")
-        
-        response = jsonify({
-            "result": prediction, 
-            "status": "new_prediction",
-            "timestamp": "2025-08-29T07:00:00Z"
+        features_scaled = scaler.transform(features.reshape(1, -1))
+        xgb_pred_prob = xgb.predict_proba(features_scaled)[0]
+
+        banker_prob = float(xgb_pred_prob[LABEL_MAP['B']])
+        player_prob = float(xgb_pred_prob[LABEL_MAP['P']])
+        tie_prob = 0.05  # 假設一個固定的和局機率
+
+        # 產生建議
+        suggestion = "等待"
+        if banker_prob > player_prob and banker_prob > 0.52:
+            suggestion = "莊"
+        elif player_prob > banker_prob and player_prob > 0.52:
+            suggestion = "閒"
+
+        return jsonify({
+            "banker": round(banker_prob, 4),
+            "player": round(player_prob, 4),
+            "tie": round(tie_prob, 4),
+            "details": {
+                "xgb_suggestion": REVERSE_MAP[np.argmax(xgb_pred_prob)],
+                "hmm_suggestion": hmm_prediction,
+                "final_suggestion": suggestion
+            }
         })
-        
-        # 添加 CORS 頭部
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-        
-        return response
-        
+
+    except FileNotFoundError as e:
+        app.logger.error(f"模型檔案未找到: {e}", exc_info=True)
+        return jsonify({"error": "模型檔案不存在，請確認模型已訓練。"}), 500
     except Exception as e:
-        app.logger.error(f"預測錯誤: {str(e)}", exc_info=True)
-        return jsonify({"error": "內部伺服器錯誤", "details": str(e)}), 500
+        app.logger.error(f"預測時發生未預期錯誤: {e}", exc_info=True)
+        return jsonify({"error": "內部伺服器錯誤"}), 500
 
-def is_data_identical(new_data, existing_data):
-    # 實現數據比較邏輯
-    return new_data == existing_data
+# =============================================================================
+# 應用程式啟動
+# =============================================================================
 
-def make_prediction(data):
-    # 實現您的預測邏輯
-    # 這裡應該包含您的 XGBoost 和 HMM 模型預測代碼
-    # 暫時返回模擬數據
-    return {
-        "prediction": "示例預測結果",
-        "confidence": 0.85,
-        "model_used": "XGBoost"
-    }
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.logger.info(f"啟動應用程式，端口: {port}")
-    app.run(host='0.0.0.0', port=port, debug=False)
+if __name__ == "__main__":
+    # 在應用程式啟動時執行模型檢查和訓練
+    with app.app_context():
+        train_models_if_needed()
+    
+    # 從環境變數獲取端口，預設為 8000
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port, debug=False)
