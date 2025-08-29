@@ -64,7 +64,6 @@ def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
     if use_hmm_features:
         hmm_banker_prob = 0.5
         hmm_player_prob = 0.5
-        # **修正**: 增加 hasattr 檢查，確保模型是成功訓練的
         if hmm_model and hasattr(hmm_model, 'emissionprob_') and len(roadmap) > 1:
             try:
                 hmm_observations = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
@@ -104,14 +103,16 @@ def train_hmm_model(all_history):
         logging.warning("HMM 訓練數據不足，跳過訓練。")
         return None
     try:
-        hmm_model = hmm.GaussianHMM(n_components=2, covariance_type="diag", n_iter=100, random_state=42)
+        # **修正**: 改用 MultinomialHMM，更適合離散觀測值
+        hmm_model = hmm.MultinomialHMM(n_components=2, n_iter=100, random_state=42)
         hmm_model.fit(hmm_observations)
-        # **修正**: 檢查模型是否真的收斂並產生了必要的屬性
+        
         if not hasattr(hmm_model, 'emissionprob_'):
-            logging.error("HMM 模型訓練後未產生 'emissionprob_' 屬性，訓練可能失敗。")
+            logging.error("HMM 模型訓練後未產生 'emissionprob_' 屬性，訓練失敗。")
             return None
+
         joblib.dump(hmm_model, hmm_model_path)
-        logging.info(f"HMM 模型已儲存至 {hmm_model_path}")
+        logging.info(f"HMM 模型已成功儲存至 {hmm_model_path}")
         return hmm_model
     except Exception as e:
         logging.error(f"HMM 模型訓練失敗: {e}", exc_info=True)
