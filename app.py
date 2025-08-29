@@ -111,7 +111,6 @@ def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
     features = [b_ratio, p_ratio, streak, streak_type, prev_result]
     hmm_prediction = "等待"
 
-    # **修正**: 確保 HMM 特徵維度一致
     if use_hmm_features:
         hmm_banker_prob = 0.5
         hmm_player_prob = 0.5
@@ -136,7 +135,6 @@ def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
             except Exception as e:
                 app.logger.warning(f"HMM 特徵提取失敗: {e}. 使用預設機率。")
         
-        # 無論計算成功與否，都添加 HMM 特徵以保證維度正確
         features.extend([hmm_banker_prob, hmm_player_prob])
     
     return np.array(features, dtype=np.float32), hmm_prediction
@@ -226,6 +224,12 @@ def train_models_if_needed():
         app.logger.info("所有模型檔案均已存在，無需重新訓練。")
 
 # =============================================================================
+# **修正**: 在 Gunicorn 啟動時執行模型訓練
+# =============================================================================
+with app.app_context():
+    train_models_if_needed()
+
+# =============================================================================
 # Flask 路由 (API Endpoints)
 # =============================================================================
 
@@ -306,12 +310,9 @@ def predict():
         return jsonify({"error": "內部伺服器錯誤"}), 500
 
 # =============================================================================
-# 應用程式啟動
+# 應用程式啟動 (僅供本機開發使用)
 # =============================================================================
 
 if __name__ == "__main__":
-    with app.app_context():
-        train_models_if_needed()
-    
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False)
