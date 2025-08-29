@@ -1,69 +1,102 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-# 移除或註解掉以下兩行
-# from flask_limiter import Limiter
-# from flask_limiter.util import get_remote_address
-# from flask_caching import Cache
-import logging
-from logging.handlers import RotatingFileHandler
+import numpy as np
+from sklearn.linear_model import SGDClassifier
+from sklearn.exceptions import NotFittedError
 
 app = Flask(__name__)
-CORS(app)  # 處理跨域請求
+CORS(app)
 
-# 註解掉 Limiter 和 Cache 相關代碼
-# limiter = Limiter(
-#     app,
-#     key_func=get_remote_address,
-#     default_limits=["200 per day", "50 per hour"]
-# )
+# === 初始化一個全局的、可持續學習的 AI 模型 ===
+online_model = SGDClassifier(loss='log_loss', max_iter=1000, tol=1e-3)
+label_map = {'莊': 0, '閒': 1}
+classes = np.array([0, 1])
 
-# cache = Cache(app, config={'CACHE_TYPE': 'simple'})
+def extract_features(roadmap):
+    """
+    特徵提取器：將牌路轉換為 AI 能理解的數字。
+    """
+    window = roadmap[-20:] # 分析最近20手
+    b_count = window.count('莊')
+    p_count = window.count('閒')
+    total = b_count + p_count
+    b_ratio = b_count / total if total > 0 else 0.5
+    p_ratio = p_count / total if total > 0 else 0.5
 
-# 設置日誌
-log_handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=1)
-log_handler.setLevel(logging.INFO)
-app.logger.addHandler(log_handler)
+    streak = 0
+    last = window[-1] if window else None
+    for item in reversed(window):
+        if item == last:
+            streak += 1
+        else:
+            break
+    
+    streak_type = 0 if last == '莊' else 1
+    return np.array([b_ratio, p_ratio, streak, streak_type])
 
-# 存儲歷史數據
-historical_data = []
+def hmm_predict(roadmap):
+    """
+    規則型 HMM 模擬器：專門判斷序列關係。
+    """
+    if len(roadmap) < 2: return "等待", 0.5
+    last_two = roadmap[-2:]
+    if last_two == ['莊', '閒']: return "閒", 0.65
+    if last_two == ['閒', '莊']: return "莊", 0.65
+    if last_two == ['莊', '莊']: return "莊", 0.7
+    if last_two == ['閒', '閒']: return "閒", 0.7
+    return "等待", 0.5
 
-@app.route('/predict', methods=['POST'])
-# 移除裝飾器
-# @limiter.limit("10 per minute")
-# @cache.cached(timeout=60)
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"status": "success", "message": "AI Engine is running."})
+
+@app.route("/predict", methods=["POST"])
 def predict():
+    global online_model
+    data = request.get_json()
+    roadmap = data.get("roadmap", [])
+    
+    filtered_roadmap = [r for r in roadmap if r in ['莊', '閒']]
+
+    if len(filtered_roadmap) < 5:
+        return jsonify({
+            "banker": 0.5, "player": 0.5, "tie": 0.05,
+            "details": { "hmm": "資料不足" }
+        })
+
+    # --- 即時學習 ---
+    if len(filtered_roadmap) > 1:
+        unique_outcomes = set(filtered_roadmap)
+        if len(unique_outcomes) > 1:
+            X_train = extract_features(filtered_roadmap[:-1]).reshape(1, -1)
+            y_train = np.array([label_map[filtered_roadmap[-1]]])
+            online_model.partial_fit(X_train, y_train, classes=classes)
+
+    # --- 預測 ---
+    current_features = extract_features(filtered_roadmap).reshape(1, -1)
+    
     try:
-        data = request.get_json()
-        
-        if not data:
-            return jsonify({"error": "No data provided"}), 400
-        
-        # 檢查數據是否與歷史數據相同
-        if is_data_identical(data, historical_data):
-            app.logger.info("收到的路紙與現有歷史數據一致，使用快取結果。")
-            # 返回快取結果
-            return jsonify({"result": "cached_prediction", "status": "unchanged"})
-        
-        # 更新歷史數據
-        historical_data.clear()
-        historical_data.extend(data)
-        
-        # 進行預測
-        prediction = make_prediction(data)
-        
-        return jsonify({"result": prediction, "status": "new_prediction"})
-        
-    except Exception as e:
-        app.logger.error(f"Prediction error: {str(e)}")
-        return jsonify({"error": "Internal server error"}), 500
+        sgd_pred_prob = online_model.predict_proba(current_features)[0]
+    except NotFittedError:
+        sgd_pred_prob = np.array([0.5, 0.5])
 
-def is_data_identical(new_data, existing_data):
-    # 實現數據比較邏輯
-    return new_data == existing_data
+    hmm_pred, hmm_conf = hmm_predict(filtered_roadmap)
+    hmm_prob = np.array([hmm_conf, 1 - hmm_conf]) if hmm_pred == '莊' else np.array([1 - hmm_conf, hmm_conf])
 
-def make_prediction(data):
-    # 實現您的預測邏輯
-    return "prediction_result"
+    # --- 融合預測 ---
+    final_prob = (sgd_pred_prob * 0.7) + (hmm_prob * 0.3)
+    
+    banker_prob = final_prob[0]
+    player_prob = final_prob[1]
 
-if __name__ == '__main__':
-    app.run(debug=True)
+    return jsonify({
+        "banker": round(float(banker_prob), 3),
+        "player": round(float(player_prob), 3),
+        "tie": 0.05,
+        "details": {
+            "hmm": f"{hmm_pred} ({hmm_conf:.2f})"
+        }
+    })
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000, debug=False)
