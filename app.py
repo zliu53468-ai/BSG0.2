@@ -170,7 +170,8 @@ def train_hmm_model(all_history):
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                hmm_model.fit(hmm_observations_sequence)
+                # 移除 init_params，讓 hmmlearn 內部自行處理初始化
+                hmm_model.fit(hmm_observations_sequence) 
                 # 檢查 emissionprob_ 是否存在，只有成功訓練後才會有
                 if hasattr(hmm_model, 'emissionprob_'):
                     joblib.dump(hmm_model, hmm_model_path)
@@ -223,14 +224,14 @@ def train_models_if_needed():
         
         # 特徵數量現在是 5 (原始) + 2 (HMM機率) = 7
         expected_feature_dim = 7 
-        if hmm_model is None: # 如果 HMM 未成功訓練，則預期特徵維度為 5
+        if hmm_model is None or not hasattr(hmm_model, 'emissionprob_'): # 如果 HMM 未成功訓練，則預期特徵維度為 5
             expected_feature_dim = 5
 
         if X_train.shape[1] != expected_feature_dim:
              print(f"警告: 訓練數據特徵維度不符 (預期 {expected_feature_dim}, 實際 {X_train.shape[1]})。")
              print("這可能表示 HMM 訓練失敗或數據問題，將嘗試使用不含 HMM 特徵的數據訓練 XGBoost。")
              # 如果維度不符，且 HMM 未載入，則重新準備不含 HMM 特徵的訓練數據
-             if hmm_model is None:
+             if hmm_model is None or not hasattr(hmm_model, 'emissionprob_'):
                  X_train, y_train = prepare_training_data(all_history, None) # 重新準備不含 HMM 特徵的數據
                  if X_train.shape[1] != 5: # 如果重新準備後仍不符，則返回
                      print("重新準備不含 HMM 特徵的數據後，特徵維度仍不符，無法訓練 XGBoost。")
@@ -297,14 +298,10 @@ def predict():
     current_game_sequence_for_prediction = [r for r in filtered_received_roadmap if r in ["B", "P"]]
 
 
-    # 檢查所有模型檔案 (包括 HMM 和 XGBoost) 是否存在
-    model_files = ['xgb_model.pkl', 'scaler.pkl', 'hmm_model.pkl']
-    # 如果 HMM 模型檔案不存在，則只檢查 XGBoost 和 scaler
-    if not os.path.exists(os.path.join(MODEL_DIR, 'hmm_model.pkl')):
-        model_files = ['xgb_model.pkl', 'scaler.pkl']
-    
+    # 檢查所有模型檔案 (包括 XGBoost 和 scaler) 是否存在
+    model_files = ['xgb_model.pkl', 'scaler.pkl']
     if not all(os.path.exists(os.path.join(MODEL_DIR, f)) for f in model_files):
-        print("警告: 預測時發現部分模型檔案缺失，回傳預設機率。請檢查服務啟動日誌中的訓練過程。")
+        print("警告: 預測時發現 XGBoost 或 Scaler 模型檔案缺失，回傳預設機率。請檢查服務啟動日誌中的訓練過程。")
         return jsonify({
             "banker": 0.5,
             "player": 0.5,
@@ -320,14 +317,14 @@ def predict():
     xgb = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
     
     hmm_model = None
-    if os.path.exists(os.path.join(MODEL_DIR, 'hmm_model.pkl')):
-        hmm_model = joblib.load(os.path.join(MODEL_DIR, 'hmm_model.pkl'))
+    hmm_model_path = os.path.join(MODEL_DIR, 'hmm_model.pkl')
+    if os.path.exists(hmm_model_path):
+        hmm_model = joblib.load(hmm_model_path)
 
     # 特徵轉換與預測
     # 這裡使用 `current_game_sequence_for_prediction` 來提取特徵，並包含 HMM 特徵
     features, hmm_prediction = extract_features(current_game_sequence_for_prediction, hmm_model)
     
-    # 如果沒有足夠的有效歷史數據來提取特徵，可能導致錯誤
     # 這裡的 features.size 應該是 5 (原始) + 2 (HMM的2個機率) = 7
     expected_feature_size = 7 
     if hmm_model is None or not hasattr(hmm_model, 'emissionprob_'): # 如果 HMM 未成功載入或訓練，則預期特徵維度為 5
