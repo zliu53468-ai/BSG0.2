@@ -18,8 +18,9 @@ HISTORY_FILE = 'history.json'
 MODEL_DIR = 'models'
 
 # 標籤映射
-label_map = {'莊': 0, '閒': 1}
-reverse_map = {0: '莊', 1: '閒'}
+# 修正: 將 '莊'/'閒' 鍵改為 'B'/'P' 以匹配數據中的表示
+label_map = {'B': 0, 'P': 1} 
+reverse_map = {0: '莊', 1: '閒'} # 反向映射仍使用中文顯示，這是沒問題的
 
 # 初始歷史數據，會在首次啟動時寫入檔案
 # 'P' 代表閒 (Player), 'B' 代表莊 (Banker), 'T' 代表和 (Tie)
@@ -87,8 +88,8 @@ def prepare_training_data(roadmap):
     # 從第二局開始，用前 i 局的數據作為特徵，預測第 i 局的結果
     for i in range(1, len(filtered)):
         features = extract_features(filtered[:i])
+        y.append(label_map[filtered[i]]) # 此處會導致 KeyError if label_map doesn't match 'B' or 'P'
         X.append(features)
-        y.append(label_map[filtered[i]])
     return np.array(X, dtype=np.float32), np.array(y, dtype=np.int32)
 
 def train_models_if_needed():
