@@ -158,7 +158,7 @@ def train_hmm_model(all_history):
 
     # 設置 HMM 模型 (3 個隱藏狀態: 莊趨勢, 閒趨勢, 交替/震盪)
     # covariance_type="diag" 適用於每個特徵獨立的情況 (這裡只有一個特徵: 莊/閒)
-    hmm_model = hmm.GaussianHMM(n_components=3, covariance_type="diag", n_iter=200, random_state=42)
+    hmm_model = hmm.GaussianHMM(n_components=2, covariance_type="diag", n_iter=200, random_state=42) # 將 n_components 改為 2
     
     try:
         hmm_model.fit(hmm_observations_sequence)
