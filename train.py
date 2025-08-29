@@ -67,13 +67,11 @@ def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
         if hmm_model and hasattr(hmm_model, 'emissionprob_') and len(roadmap) > 1:
             try:
                 hmm_observations = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
-                # **修正**: 增加保護，避免在只有一種觀測值時出錯
                 if len(hmm_observations) > 1 and len(np.unique(hmm_observations)) > 1:
                     hidden_states = hmm_model.predict(hmm_observations)
                     last_hidden_state = hidden_states[-1]
                     emission_probs = hmm_model.emissionprob_[last_hidden_state]
                     
-                    # **修正**: 增加對 emission_probs 長度的檢查
                     if len(emission_probs) > 1:
                         hmm_banker_prob = emission_probs[LABEL_MAP['B']]
                         hmm_player_prob = emission_probs[LABEL_MAP['P']]
@@ -111,10 +109,10 @@ def train_hmm_model(all_history):
         logging.warning("HMM 訓練數據不足或缺乏多樣性 (少於2種結果)，跳過訓練。")
         return None
     try:
-        hmm_model = hmm.MultinomialHMM(n_components=2, n_iter=100, random_state=42, tol=0.001)
+        # **最終修正**: 使用 CategoricalHMM，這是專為離散觀測值設計的
+        hmm_model = hmm.CategoricalHMM(n_components=2, n_iter=100, random_state=42, tol=0.001)
         hmm_model.fit(hmm_observations)
         
-        # **修正**: 訓練後進行更嚴格的檢查
         if not hasattr(hmm_model, 'emissionprob_') or hmm_model.emissionprob_.shape[1] < 2:
             logging.error(f"HMM 模型訓練失敗，emissionprob_ 形狀不符: {hmm_model.emissionprob_.shape if hasattr(hmm_model, 'emissionprob_') else '不存在'}")
             return None
