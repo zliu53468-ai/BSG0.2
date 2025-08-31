@@ -1,168 +1,184 @@
-import os
-import json
-import logging
+# -*- coding: utf-8 -*-
 import numpy as np
 import joblib
+import os
+import random
+import warnings
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 from hmmlearn import hmm
 
-# =============================================================================
-# 訓練腳本設定
-# =============================================================================
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# 忽略 HMM learn 的一些舊版本警告
+warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
-HISTORY_FILE = 'history.json'
+# =============================================================================
+# 全域設定
+# =============================================================================
 MODEL_DIR = 'models'
+SYNTHETIC_DATA_SIZE = 5000 # 生成5000筆模擬數據以進行穩健的訓練
+N_FEATURES_WINDOW = 20     # 提取特徵時回看的時間窗口大小
 LABEL_MAP = {'B': 0, 'P': 1}
 
-INITIAL_HISTORY_DATA = [
-    "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P", "B", "B", "P", "B", "B", "P", "T", "T", "B", "P", "B", "B", "B", "B", "B", "P", "P", "B", "P", "B", "B", "P", "P", "P", "P", "P", "P", "B", "B", "T", "B", "T", "B", "P", "P", "P", "B", "P", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "B", "P", "B", "P", "B", "B", "P", "B", "P", "T", "T", "B", "B", "B", "B", "P", "B", "B", "B", "P", "B", "T", "P", "P", "B", "B", "B", "P", "P", "P", "B", "P", "B", "P", "P", "P", "B", "T", "B", "P", "B", "T", "B", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "B", "T", "T", "B", "P", "B", "B", "P", "P", "P", "B", "P", "B", "T", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "B", "P", "T", "B", "P", "T", "B", "B", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "B", "B", "P", "B", "P", "B", "T", "B", "B", "P", "P", "B", "B", "P", "T", "P", "P", "B", "P", "B", "B", "B", "B", "P", "B", "P", "B", "B", "T", "P", "B", "P", "B", "T", "T", "B", "P", "P", "B", "P", "P", "B", "B", "P", "B", "P", "T", "P", "P", "P", "P", "B", "B", "B", "B", "B", "P", "B", "P", "B", "P", "B", "B", "P", "B", "P", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "B", "P", "B", "P", "B", "P", "T", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "P", "P", "B", "B", "P", "B", "T", "B", "T", "B", "P", "B", "P", "T", "P", "B", "B", "P", "P", "P", "B", "P", "B", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "B", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "P", "P", "B", "P", "P", "P", "P", "P", "B", "P", "P", "B", "P", "B", "B", "P", "T", "B", "P", "B", "P", "P", "T", "P", "B", "B", "T", "B", "P", "T", "P", "B", "P", "B", "B", "P", "B", "B", "T", "P", "P", "P", "P", "T", "P", "T", "B", "B", "P", "B", "B", "P", "P", "P", "B", "P", "B", "P", "T", "P", "P", "T", "P", "P", "B", "P", "P", "B", "P", "P", "B", "P", "P", "T", "B", "P", "B", "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "T", "T", "B", "P", "B", "B", "B", "T", "T", "B", "B", "P", "B", "T", "P", "B", "P", "B", "P", "P", "P", "B", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", "P", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "B", "B", "B", "P", "B", "T", "T", "P", "B", "B", "B", "P", "B", "B", "P", "B", "P", "B", "P", "P", "P", "P", "P", "P", "B", "B", "B", "P", "T", "P", "B", "T", "B", "B", "B", "B", "T", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "B", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "B", "B", "B", "T", "B", "B", "P", "B", "P", "T", "P", "B", "B", "P", "B", "B", "B", "P", "P", "P", "B", "P", "P", "B", "P", "P", "B", "B", "P", "P", "B", "P", "B", "B", "B", "B", "B", "B", "B", "B", "P", "T", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", "P", "P", "T", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "P", "B", "T", "P", "B", "B", "P", "B", "P", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "T", "P", "P", "B", "T", "B", "P", "P", "P", "B", "B", "P", "B", "B", "P", "B", "P", "P", "B", "B", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
-]
-
 # =============================================================================
-# 數據處理函式
+# 特徵提取函式 (此函式必須與 app.py 中的版本邏輯一致)
 # =============================================================================
-
-def load_data():
-    if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    logging.info(f"歷史檔案 '{HISTORY_FILE}' 不存在，將使用初始數據。")
-    return INITIAL_HISTORY_DATA
-
-def save_data(data):
-    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-# =============================================================================
-# 特徵工程函式
-# =============================================================================
-
-def extract_features(roadmap, hmm_model=None, use_hmm_features=False):
-    N = 20
-    window = roadmap[-N:]
-    b_count = window.count('B')
-    p_count = window.count('P')
-    total = b_count + p_count
-    b_ratio = b_count / total if total > 0 else 0.5
-    p_ratio = p_count / total if total > 0 else 0.5
-    streak = 0
-    last_result = None
-    for item in reversed(window):
-        if item in ['B', 'P']:
-            if last_result is None:
-                last_result = item
-                streak = 1
-            elif item == last_result:
-                streak += 1
-            else:
-                break
-    streak_type = LABEL_MAP.get(last_result, -1)
-    prev_result = LABEL_MAP.get(window[-1], -1) if window else -1
-    features = [b_ratio, p_ratio, streak, streak_type, prev_result]
-    if use_hmm_features:
-        hmm_banker_prob = 0.5
-        hmm_player_prob = 0.5
-        if hmm_model and hasattr(hmm_model, 'emissionprob_') and len(roadmap) > 1:
-            try:
-                hmm_observations = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
-                if len(hmm_observations) > 1 and len(np.unique(hmm_observations)) > 1:
-                    hidden_states = hmm_model.predict(hmm_observations)
-                    last_hidden_state = hidden_states[-1]
-                    emission_probs = hmm_model.emissionprob_[last_hidden_state]
-                    
-                    if len(emission_probs) > 1:
-                        hmm_banker_prob = emission_probs[LABEL_MAP['B']]
-                        hmm_player_prob = emission_probs[LABEL_MAP['P']]
-                        total_prob = hmm_banker_prob + hmm_player_prob
-                        if total_prob > 0:
-                            hmm_banker_prob /= total_prob
-                            hmm_player_prob /= total_prob
-            except Exception as e:
-                logging.warning(f"HMM 特徵提取失敗: {e}.")
-        features.extend([hmm_banker_prob, hmm_player_prob])
-    return np.array(features, dtype=np.float32)
-
-def prepare_training_data(roadmap, hmm_model=None, use_hmm_features=False):
-    filtered = [r for r in roadmap if r in LABEL_MAP]
-    X, y = [], []
-    for i in range(1, len(filtered)):
-        current_features = extract_features(filtered[:i], hmm_model, use_hmm_features)
-        X.append(current_features)
-        y.append(LABEL_MAP[filtered[i]])
-    return np.array(X, dtype=np.float32), np.array(y, dtype=np.int32)
-
-# =============================================================================
-# 模型訓練函式
-# =============================================================================
-
-def train_hmm_model(all_history):
-    hmm_model_path = os.path.join(MODEL_DIR, 'hmm_model.pkl')
-    logging.info("開始訓練 HMM 模型...")
-    hmm_observations = np.array([LABEL_MAP[r] for r in all_history if r in LABEL_MAP]).reshape(-1, 1)
+def extract_features_for_training(full_roadmap):
+    """從完整的路單中為訓練提取特徵和標籤。"""
+    features_list = []
+    labels = []
     
-    unique_obs = np.unique(hmm_observations)
-    logging.info(f"HMM 訓練數據中有 {len(unique_obs)} 種獨特結果: {unique_obs}")
+    # 需要至少 N+1 個數據點才能提取第一組特徵及其標籤
+    if len(full_roadmap) <= N_FEATURES_WINDOW:
+        return np.array([]), np.array([])
 
-    if len(hmm_observations) < 20 or len(unique_obs) < 2:
-        logging.warning("HMM 訓練數據不足或缺乏多樣性 (少於2種結果)，跳過訓練。")
-        return None
-    try:
-        # **最終修正**: 使用 CategoricalHMM，這是專為離散觀測值設計的
-        hmm_model = hmm.CategoricalHMM(n_components=2, n_iter=100, random_state=42, tol=0.001)
-        hmm_model.fit(hmm_observations)
+    for i in range(N_FEATURES_WINDOW, len(full_roadmap)):
+        window = full_roadmap[i-N_FEATURES_WINDOW:i]
+        label = full_roadmap[i]
+
+        # 只為有明確標籤 (B/P) 的數據點創建訓練樣本
+        if label not in LABEL_MAP:
+            continue
+
+        b_count = window.count('B')
+        p_count = window.count('P')
+        total = b_count + p_count
+
+        b_ratio = b_count / total if total > 0 else 0.5
+        p_ratio = p_count / total if total > 0 else 0.5
         
-        if not hasattr(hmm_model, 'emissionprob_') or hmm_model.emissionprob_.shape[1] < 2:
-            logging.error(f"HMM 模型訓練失敗，emissionprob_ 形狀不符: {hmm_model.emissionprob_.shape if hasattr(hmm_model, 'emissionprob_') else '不存在'}")
-            return None
+        streak = 0
+        last_result = None
+        for item in reversed(window):
+            if item in ['B', 'P']:
+                if last_result is None:
+                    last_result = item
+                    streak = 1
+                elif item == last_result:
+                    streak += 1
+                else:
+                    break
+        
+        streak_type = LABEL_MAP.get(last_result, -1)
+        prev_result = LABEL_MAP.get(window[-1], -1) if window else -1
 
-        joblib.dump(hmm_model, hmm_model_path)
-        logging.info(f"HMM 模型已成功儲存至 {hmm_model_path}")
-        return hmm_model
-    except Exception as e:
-        logging.error(f"HMM 模型訓練時發生例外: {e}", exc_info=True)
-        return None
+        features = [b_ratio, p_ratio, streak, streak_type, prev_result]
+        features_list.append(features)
+        labels.append(LABEL_MAP[label])
 
-def train_models():
-    """執行所有模型的訓練流程。"""
-    logging.info("檢查並開始模型訓練...")
-    os.makedirs(MODEL_DIR, exist_ok=True)
+    return np.array(features_list), np.array(labels)
+
+# =============================================================================
+# 主要訓練邏輯
+# =============================================================================
+def train():
+    """執行完整的模型訓練流程。"""
+    print("="*50)
+    print("開始重新訓練 AI 模型...")
+    print("="*50)
+
+    # 1. 建立模型儲存目錄
+    if not os.path.exists(MODEL_DIR):
+        os.makedirs(MODEL_DIR)
+        print(f"✅ 已建立目錄: {MODEL_DIR}")
+
+    # 2. 生成平衡的模擬數據以避免偏差
+    print(f"🔄 正在生成 {SYNTHETIC_DATA_SIZE} 筆高品質模擬數據...")
+    synthetic_roadmap = []
+    # 根據百家樂真實機率 (排除和局後): 閒家勝率約 49.32%, 莊家勝率約 50.68%
+    p_win_prob = 0.4932 
+    for _ in range(SYNTHETIC_DATA_SIZE):
+        if random.random() < p_win_prob:
+            synthetic_roadmap.append('P')
+        else:
+            synthetic_roadmap.append('B')
+    print("✅ 模擬數據生成完畢。")
+
+    # 3. 提取基礎特徵
+    print("🔄 正在提取基礎特徵...")
+    X_basic, y = extract_features_for_training(synthetic_roadmap)
+
+    if len(X_basic) == 0:
+        print("❌ 錯誤：無法從數據中提取任何特徵。訓練中止。")
+        return
+    print(f"✅ 基礎特徵提取完成，共 {len(y)} 筆訓練樣本。")
+
+    # 4. 在完整的序列上訓練 HMM 模型
+    print("🔄 正在訓練 HMM 模型...")
+    hmm_roadmap_numeric = np.array([LABEL_MAP[r] for r in synthetic_roadmap if r in LABEL_MAP]).reshape(-1, 1)
     
-    if not os.path.exists(HISTORY_FILE):
-        save_data(INITIAL_HISTORY_DATA)
+    # 【關鍵修正】: 對於離散觀測值 (莊/閒)，必須使用 CategoricalHMM
+    # n_components 是隱藏狀態的數量，4是一個合理的起始值
+    hmm_model = hmm.CategoricalHMM(n_components=4, n_iter=100, random_state=42, tol=0.01)
+    hmm_model.fit(hmm_roadmap_numeric)
+    joblib.dump(hmm_model, os.path.join(MODEL_DIR, 'hmm_model.pkl'))
+    print("✅ HMM 模型 (hmm_model.pkl) 已訓練並儲存。")
 
-    all_history = load_data()
-    if not all_history:
-        logging.error("歷史數據為空，無法訓練模型。")
-        return
+    # 5. 使用訓練好的 HMM 模型提取進階特徵
+    print("🔄 正在使用 HMM 模型提取進階特徵...")
+    hmm_features = []
+    for i in range(N_FEATURES_WINDOW, len(synthetic_roadmap)):
+        if synthetic_roadmap[i] not in LABEL_MAP:
+            continue
 
-    hmm_model = train_hmm_model(all_history)
-    use_hmm_features = hmm_model is not None
-    logging.info(f"HMM 模型訓練完成。是否使用 HMM 特徵: {use_hmm_features}")
+        current_roadmap_numeric = np.array([LABEL_MAP[r] for r in synthetic_roadmap[:i] if r in LABEL_MAP]).reshape(-1, 1)
+        
+        if len(current_roadmap_numeric) < 1:
+            hmm_features.append([0.5, 0.5]) # 對於太短的序列使用預設機率
+            continue
+            
+        try:
+            # 使用與 app.py 相同的穩健預測邏輯
+            hidden_states = hmm_model.predict(current_roadmap_numeric)
+            last_state = hidden_states[-1]
+            transition_probs = hmm_model.transmat_[last_state, :]
+            emission_probs = hmm_model.emissionprob_
+            
+            prob_b = np.dot(transition_probs, emission_probs[:, LABEL_MAP['B']])
+            prob_p = np.dot(transition_probs, emission_probs[:, LABEL_MAP['P']])
+            
+            total_prob = prob_b + prob_p
+            if total_prob > 1e-9:
+                hmm_features.append([prob_b/total_prob, prob_p/total_prob])
+            else:
+                hmm_features.append([0.5, 0.5])
+        except Exception:
+            hmm_features.append([0.5, 0.5]) # 如果出錯則使用預設值
+    
+    X_combined = np.concatenate([X_basic, np.array(hmm_features)], axis=1)
+    print(f"✅ 進階特徵提取完成，最終特徵維度: {X_combined.shape[1]}")
 
-    logging.info("準備訓練 XGBoost 模型...")
-    X_train, y_train = prepare_training_data(all_history, hmm_model, use_hmm_features)
-
-    if X_train.shape[0] < 10:
-        logging.error("XGBoost 訓練數據不足，無法訓練。")
-        return
-
+    # 6. 訓練 Scaler 和 XGBoost
+    X_train, X_test, y_train, y_test = train_test_split(X_combined, y, test_size=0.2, random_state=42, stratify=y)
+    
+    print("🔄 正在標準化特徵 (Scaler)...")
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_train)
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
     joblib.dump(scaler, os.path.join(MODEL_DIR, 'scaler.pkl'))
-
-    xgb = XGBClassifier(n_estimators=100, use_label_encoder=False, eval_metric='logloss', random_state=42)
-    xgb.fit(X_scaled, y_train)
-    joblib.dump(xgb, os.path.join(MODEL_DIR, 'xgb_model.pkl'))
-    logging.info("XGBoost 模型訓練完成並儲存。")
-
-    feature_info = {'use_hmm_features': use_hmm_features}
+    print("✅ 標準化器 (scaler.pkl) 已儲存。")
+    
+    print("🔄 正在訓練 XGBoost 最終模型...")
+    xgb_model = XGBClassifier(
+        objective='binary:logistic', eval_metric='logloss',
+        n_estimators=150, learning_rate=0.05, max_depth=4,
+        use_label_encoder=False, random_state=42
+    )
+    xgb_model.fit(X_train_scaled, y_train)
+    
+    accuracy = xgb_model.score(X_test_scaled, y_test)
+    print(f"📈 模型在測試集上的準確率: {accuracy:.4f}")
+    
+    joblib.dump(xgb_model, os.path.join(MODEL_DIR, 'xgb_model.pkl'))
+    print("✅ XGBoost 模型 (xgb_model.pkl) 已儲存。")
+    
+    # 7. 儲存特徵資訊
+    feature_info = {'use_hmm_features': True}
     joblib.dump(feature_info, os.path.join(MODEL_DIR, 'feature_info.pkl'))
-    logging.info("特徵資訊已儲存。")
+    print("✅ 特徵資訊 (feature_info.pkl) 已儲存。")
 
-# =============================================================================
-# 主執行區塊
-# =============================================================================
-if __name__ == "__main__":
-    train_models()
+    print("\n🎉 所有模型已成功重新訓練並儲存！")
+
+if __name__ == '__main__':
+    train()
+
