@@ -1,8 +1,9 @@
-Flask==2.3.3
-Flask-CORS==4.0.0
-gunicorn==21.2.0
-xgboost==1.7.6
-numpy==1.26.4
-scikit-learn==1.4.2
-hmmlearn==0.3.0
-joblib==1.4.2
+Flask Web Framework
+flask
+flask-cors
+Machine Learning Libraries
+numpy==1.23.5
+scikit-learn==1.2.2
+xgboost==1.7.5
+hmmlearn==0.2.8
+joblib==1.2.0
