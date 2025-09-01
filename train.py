@@ -28,16 +28,14 @@ REAL_HISTORY_DATA = [
 # =============================================================================
 class BaccaratAnalyzer:
     def __init__(self, roadmap):
-        self.roadmap = [r for r in roadmap if r in ['B', 'P', 'T']]
+        self.roadmap = [r for r in roadmap if r in ['B', 'P']]
         self.big_road_grid = self._generate_big_road_grid()
 
     def _generate_big_road_grid(self):
         grid = []
         if not self.roadmap: return grid
-        filtered_map = [r for r in self.roadmap if r in ['B', 'P']]
-        if not filtered_map: return grid
         current_col, last_result = [], None
-        for result in filtered_map:
+        for result in self.roadmap:
             if result != last_result and last_result is not None:
                 grid.append(current_col)
                 current_col = []
@@ -46,17 +44,26 @@ class BaccaratAnalyzer:
         if current_col: grid.append(current_col)
         return grid
 
-    def _get_bead(self, c, r):
-        """安全地獲取大路格中的標記"""
-        if 0 <= c < len(self.big_road_grid) and 0 <= r < len(self.big_road_grid[c]):
-            return self.big_road_grid[c][r]
-        return None
-
     def _get_col_len(self, c):
-        """安全地獲取列的長度"""
-        if 0 <= c < len(self.big_road_grid):
-            return len(self.big_road_grid[c])
-        return 0
+        return len(self.big_road_grid[c]) if 0 <= c < len(self.big_road_grid) else 0
+
+    def _get_derived_bead_color(self, c, r, offset):
+        if c < offset: return None
+        
+        # 規則1: 齊整 (Neat) - 僅適用於每列的第一個 potential bead (r=0)
+        if r == 0:
+            return 'R' if self._get_col_len(c - 1) == self._get_col_len(c - offset -1) else 'B'
+        
+        # 規則2: 有無 (Has/Hasn't) & 直落 (Straight Drop) - 適用於 r > 0
+        ref_bead_exists = r < self._get_col_len(c - offset)
+        ref_bead_above_exists = (r - 1) < self._get_col_len(c - offset)
+
+        if ref_bead_exists:
+            return 'R' # 有 -> 紅
+        elif ref_bead_above_exists:
+            return 'B' # 無 -> 藍
+        
+        return 'B' # 連續兩個空格也是藍
 
     def get_derived_roads_data(self):
         roads = {'big_eye': [], 'small': [], 'cockroach': []}
@@ -67,27 +74,12 @@ class BaccaratAnalyzer:
             if len(self.big_road_grid) < offset + 1: continue
 
             for c in range(offset, len(self.big_road_grid)):
-                for r in range(6):
+                start_row = 1 if len(self.big_road_grid[c - 1]) == 1 else 0
+                for r in range(start_row, 6): # Max depth of 6
                     if r >= self._get_col_len(c): break
-                    
-                    start_row = 1 if len(self.big_road_grid[c - 1]) == 1 else 0
-                    if r < start_row: continue
+                    color = self._get_derived_bead_color(c, r, offset)
+                    if color: derived_road_flat.append(color)
 
-                    result = None
-                    if r == 0:
-                        # 齊整規則
-                        result = 'R' if self._get_col_len(c - 1) == self._get_col_len(c - 1 - offset) else 'B'
-                    else:
-                        # 有無規則
-                        has_bead_ref = self._get_bead(c - offset, r) is not None
-                        has_bead_above = self._get_bead(c - offset, r - 1) is not None
-                        if has_bead_ref:
-                            result = 'B' if not has_bead_above else 'R' # 換列為藍，直落為紅
-                        else:
-                            result = 'B' if not has_bead_above else 'R'
-
-                    if result: derived_road_flat.append(result)
-            
             if derived_road_flat:
                 grid, current_col, last_bead = [], [], None
                 for bead in derived_road_flat:
@@ -105,10 +97,7 @@ class BaccaratAnalyzer:
         features = []
         for name in ['big_eye', 'small', 'cockroach']:
             road = roads_data.get(name, [])
-            if not road:
-                features.append(0.5)
-                continue
-            flat_road = [bead for col in road for bead in col]
+            flat_road = [bead for col in road for bead in col] if road else []
             if len(flat_road) > 5:
                 window = flat_road[-10:]
                 red_count = window.count('R')
