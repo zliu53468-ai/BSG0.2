@@ -24,25 +24,32 @@ app.logger.setLevel(logging.INFO)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # =============================================================================
-# 全域變數與模型預載
+# 全域變數與模型預載 (改為延遲載入)
 # =============================================================================
 MODEL_DIR = 'models'
 LABEL_MAP = {'B': 0, 'P': 1}
 REVERSE_MAP = {0: '莊', 1: '閒'}
 N_FEATURES_WINDOW = 20
-models = {}
+models = {} # 初始化為空字典
+models_loaded = False # 新增一個旗標來追蹤模型是否已載入
 
 def load_all_models():
-    """在伺服器啟動時預先載入所有模型到記憶體"""
-    global models
+    """在第一次請求時，才載入所有模型到記憶體"""
+    global models, models_loaded
+    if models_loaded: # 如果已載入，直接返回
+        return
     try:
+        app.logger.info("⏳ 偵測到首次預測請求，開始載入 AI 專家模型...")
         models['scaler'] = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
         models['xgb'] = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
         models['hmm'] = joblib.load(os.path.join(MODEL_DIR, 'hmm_model.pkl'))
         models['lgbm'] = joblib.load(os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
+        models_loaded = True # 設置旗標為 True
         app.logger.info("✅ 所有 AI 專家模型已成功載入記憶體。")
     except Exception as e:
         app.logger.error(f"❌ 載入模型失敗: {e}", exc_info=True)
+        # 即使失敗也將旗標設為 True，避免重複嘗試載入壞掉的模型
+        models_loaded = True 
 
 # =============================================================================
 # 路單分析核心 (BaccaratAnalyzer)
@@ -153,23 +160,29 @@ def get_ml_prediction(model, scaler, roadmap):
 # API Endpoint
 # =============================================================================
 @app.route("/", methods=["GET"])
-def home(): return jsonify({"status": "online", "models_loaded": len(models)>0})
+def home(): return jsonify({"status": "online"})
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({"status": "healthy"})
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    if not models: return jsonify({"error": "模型尚未載入，請稍後重試。"}), 503
+    # 【核心修正】在第一次收到請求時，才載入模型
+    if not models_loaded:
+        load_all_models()
+    
+    if not models: return jsonify({"error": "模型檔案遺失或損毀，請重新訓練。"}), 503
     try:
         data = request.get_json(); received_roadmap = data["roadmap"]
         filtered_roadmap = [r for r in received_roadmap if r in ["B", "P"]]
         
-        # --- 【HMM 修正】HMM 獨立運作 ---
         roadmap_numeric = np.array([LABEL_MAP[r] for r in filtered_roadmap]).reshape(-1, 1)
         hmm_suggestion = get_hmm_prediction(models['hmm'], roadmap_numeric)
         
         analyzer = BaccaratAnalyzer(filtered_roadmap)
         derived_roads_data = analyzer.get_derived_roads_data()
 
-        # --- XGB & LGBM 檢查 ---
         if len(filtered_roadmap) < N_FEATURES_WINDOW:
              return jsonify({
                 "banker": 0.5, "player": 0.5, "tie": 0.05,
@@ -194,9 +207,6 @@ def predict():
         return jsonify({"error": "內部伺服器錯誤"}), 500
 
 if __name__ == "__main__":
-    load_all_models()
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False)
-else:
-    load_all_models()
 
