@@ -8,6 +8,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 from hmmlearn import hmm
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
 
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
@@ -15,8 +19,9 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # 全域設定
 # =============================================================================
 MODEL_DIR = 'models'
-TOTAL_DATA_SIZE = 8000
+TOTAL_DATA_SIZE = 10000 # 增加數據量以更好地訓練神經網路
 N_FEATURES_WINDOW = 20
+LSTM_SEQUENCE_LENGTH = 15 # LSTM 模型回看的序列長度
 LABEL_MAP = {'B': 0, 'P': 1}
 
 REAL_HISTORY_DATA = [
@@ -24,7 +29,7 @@ REAL_HISTORY_DATA = [
 ]
 
 # =============================================================================
-# 【最終修正】路單分析核心 (BaccaratAnalyzer)
+# 路單分析核心 (BaccaratAnalyzer)
 # =============================================================================
 class BaccaratAnalyzer:
     def __init__(self, roadmap):
@@ -49,37 +54,26 @@ class BaccaratAnalyzer:
 
     def _get_derived_bead_color(self, c, r, offset):
         if c < offset: return None
-        
-        # 規則1: 齊整 (Neat) - 僅適用於每列的第一個 potential bead (r=0)
         if r == 0:
             return 'R' if self._get_col_len(c - 1) == self._get_col_len(c - offset -1) else 'B'
-        
-        # 規則2: 有無 (Has/Hasn't) & 直落 (Straight Drop) - 適用於 r > 0
         ref_bead_exists = r < self._get_col_len(c - offset)
         ref_bead_above_exists = (r - 1) < self._get_col_len(c - offset)
-
-        if ref_bead_exists:
-            return 'R' # 有 -> 紅
-        elif ref_bead_above_exists:
-            return 'B' # 無 -> 藍
-        
-        return 'B' # 連續兩個空格也是藍
+        if ref_bead_exists: return 'R'
+        elif ref_bead_above_exists: return 'B'
+        return 'B'
 
     def get_derived_roads_data(self):
         roads = {'big_eye': [], 'small': [], 'cockroach': []}
         offsets = {'big_eye': 1, 'small': 2, 'cockroach': 3}
-
         for name, offset in offsets.items():
             derived_road_flat = []
             if len(self.big_road_grid) < offset + 1: continue
-
             for c in range(offset, len(self.big_road_grid)):
                 start_row = 1 if len(self.big_road_grid[c - 1]) == 1 else 0
-                for r in range(start_row, 6): # Max depth of 6
+                for r in range(start_row, 6):
                     if r >= self._get_col_len(c): break
                     color = self._get_derived_bead_color(c, r, offset)
                     if color: derived_road_flat.append(color)
-
             if derived_road_flat:
                 grid, current_col, last_bead = [], [], None
                 for bead in derived_road_flat:
@@ -109,15 +103,13 @@ class BaccaratAnalyzer:
 # =============================================================================
 # 特徵工程與訓練
 # =============================================================================
-def extract_full_features(full_roadmap):
+def extract_xgb_features(full_roadmap):
     features_list, labels = [], []
     if len(full_roadmap) <= N_FEATURES_WINDOW: return np.array([]), np.array([])
-
     for i in range(N_FEATURES_WINDOW, len(full_roadmap)):
         current_roadmap = full_roadmap[:i]
         label = full_roadmap[i]
         if label not in LABEL_MAP: continue
-
         window = current_roadmap[-N_FEATURES_WINDOW:]
         b_count = window.count('B'); p_count = window.count('P'); total = b_count + p_count
         b_ratio = b_count / total if total > 0 else 0.5; p_ratio = p_count / total if total > 0 else 0.5
@@ -130,18 +122,22 @@ def extract_full_features(full_roadmap):
         streak_type = LABEL_MAP.get(last_result, -1)
         prev_result = LABEL_MAP.get(window[-1], -1) if window else -1
         basic_features = [b_ratio, p_ratio, streak, streak_type, prev_result]
-
         analyzer = BaccaratAnalyzer(current_roadmap)
         derived_features = analyzer.get_derived_road_features()
-        
         all_features = basic_features + derived_features
         features_list.append(all_features)
         labels.append(LABEL_MAP[label])
-        
     return np.array(features_list), np.array(labels)
 
+def prepare_lstm_data(roadmap_numeric):
+    X, y = [], []
+    for i in range(len(roadmap_numeric) - LSTM_SEQUENCE_LENGTH):
+        X.append(roadmap_numeric[i:(i + LSTM_SEQUENCE_LENGTH)])
+        y.append(roadmap_numeric[i + LSTM_SEQUENCE_LENGTH])
+    return np.array(X), np.array(y)
+
 def train():
-    print("="*50); print("開始重新訓練 AI 模型 (最終穩健版)..."); print("="*50)
+    print("="*50); print("開始重新訓練 AI 模型 (三體決策引擎)..."); print("="*50)
     if not os.path.exists(MODEL_DIR): os.makedirs(MODEL_DIR); print(f"✅ 已建立目錄: {MODEL_DIR}")
 
     roadmap = list(REAL_HISTORY_DATA)
@@ -151,37 +147,56 @@ def train():
         print(f"🔄 正在補充 {num_synthetic_needed} 筆模擬數據...")
         for _ in range(num_synthetic_needed): roadmap.append('P' if random.random() < 0.4932 else 'B')
     print(f"✅ 數據準備完畢，總數據量: {len(roadmap)}。")
+    
+    roadmap_numeric = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
 
+    # --- 1. 訓練 HMM 專家 ---
     print("\n--- [開始訓練 HMM 專家] ---")
-    hmm_roadmap_numeric = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
     hmm_model = hmm.CategoricalHMM(n_components=2, n_iter=200, random_state=42, tol=1e-3, init_params="ste")
-    hmm_model.fit(hmm_roadmap_numeric)
+    hmm_model.fit(roadmap_numeric)
     joblib.dump(hmm_model, os.path.join(MODEL_DIR, 'hmm_model.pkl'))
     print("✅ HMM 專家 (hmm_model.pkl) 已儲存。")
 
+    # --- 2. 訓練 XGBoost 專家 ---
     print("\n--- [開始訓練進階 XGBoost 專家] ---")
-    print("🔄 正在提取基礎及下三路特徵...")
-    X_full, y = extract_full_features(roadmap)
-    if len(X_full) == 0:
-        print("❌ 錯誤：無法提取任何特徵。訓練中止。"); return
-    print(f"✅ 特徵提取完成，共 {len(y)} 筆樣本，特徵維度: {X_full.shape[1]}。")
-
-    X_train, X_test, y_train, y_test = train_test_split(X_full, y, test_size=0.2, random_state=42, stratify=y)
-    
-    print("🔄 正在標準化特徵 (Scaler)...")
+    X_xgb, y_xgb = extract_xgb_features(roadmap)
+    if len(X_xgb) == 0: print("❌ XGBoost 特徵提取失敗"); return
+    X_train, X_test, y_train, y_test = train_test_split(X_xgb, y_xgb, test_size=0.2, random_state=42, stratify=y_xgb)
     scaler = StandardScaler(); X_train_scaled = scaler.fit_transform(X_train); X_test_scaled = scaler.transform(X_test)
     joblib.dump(scaler, os.path.join(MODEL_DIR, 'scaler.pkl'))
-    print("✅ 標準化器 (scaler.pkl) 已儲存。")
-    
-    print("🔄 正在訓練 XGBoost 最終模型...")
+    print("✅ XGB 標準化器 (scaler.pkl) 已儲存。")
     xgb_model = XGBClassifier(objective='binary:logistic', eval_metric='logloss', n_estimators=200, learning_rate=0.05, max_depth=5, use_label_encoder=False, random_state=42)
     xgb_model.fit(X_train_scaled, y_train)
     accuracy = xgb_model.score(X_test_scaled, y_test)
-    print(f"📈 XGBoost在測試集上的準確率: {accuracy:.4f}")
+    print(f"📈 XGBoost 準確率: {accuracy:.4f}")
     joblib.dump(xgb_model, os.path.join(MODEL_DIR, 'xgb_model.pkl'))
     print("✅ XGBoost 專家 (xgb_model.pkl) 已儲存。")
     
-    print("\n🎉 所有專家模型已成功升級並儲存！")
+    # --- 3. 訓練 LSTM 專家 ---
+    print("\n--- [開始訓練 LSTM 深度記憶專家] ---")
+    X_lstm, y_lstm = prepare_lstm_data(roadmap_numeric.flatten())
+    if len(X_lstm) == 0: print("❌ LSTM 數據準備失敗"); return
+    X_lstm = np.reshape(X_lstm, (X_lstm.shape[0], X_lstm.shape[1], 1))
+    X_train_l, X_test_l, y_train_l, y_test_l = train_test_split(X_lstm, y_lstm, test_size=0.2, random_state=42, stratify=y_lstm)
+    
+    lstm_model = Sequential([
+        LSTM(50, return_sequences=True, input_shape=(LSTM_SEQUENCE_LENGTH, 1)),
+        Dropout(0.2),
+        LSTM(50),
+        Dropout(0.2),
+        Dense(1, activation='sigmoid')
+    ])
+    lstm_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    
+    print("🔄 正在訓練 LSTM 模型...")
+    lstm_model.fit(X_train_l, y_train_l, epochs=100, batch_size=64, validation_split=0.1, callbacks=[early_stopping], verbose=0)
+    loss, accuracy = lstm_model.evaluate(X_test_l, y_test_l, verbose=0)
+    print(f"📈 LSTM 準確率: {accuracy:.4f}")
+    lstm_model.save(os.path.join(MODEL_DIR, 'lstm_model.h5'))
+    print("✅ LSTM 專家 (lstm_model.h5) 已儲存。")
+
+    print("\n🎉 所有三體AI專家模型已成功訓練並儲存！")
 
 if __name__ == '__main__':
     train()
