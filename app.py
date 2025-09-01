@@ -7,7 +7,7 @@ import numpy as np
 import joblib
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import tensorflow as tf
+import lightgbm as lgb
 
 # =============================================================================
 # Flask 應用程式與日誌設定
@@ -29,20 +29,23 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 MODEL_DIR = 'models'
 LABEL_MAP = {'B': 0, 'P': 1}
 REVERSE_MAP = {0: '莊', 1: '閒'}
-LSTM_SEQUENCE_LENGTH = 15
+N_FEATURES_WINDOW = 20
 models = {}
 
 def load_all_models():
     """在伺服器啟動時預先載入所有模型到記憶體"""
     global models
     try:
-        models['lstm'] = tf.keras.models.load_model(os.path.join(MODEL_DIR, 'lstm_model.h5'))
-        app.logger.info("✅ LSTM AI 核心已成功載入記憶體。")
+        models['scaler'] = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
+        models['xgb'] = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
+        models['hmm'] = joblib.load(os.path.join(MODEL_DIR, 'hmm_model.pkl'))
+        models['lgbm'] = joblib.load(os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
+        app.logger.info("✅ 所有 AI 專家模型已成功載入記憶體。")
     except Exception as e:
         app.logger.error(f"❌ 載入模型失敗: {e}", exc_info=True)
 
 # =============================================================================
-# 路單分析核心 (僅供前端繪圖使用)
+# 路單分析核心 (BaccaratAnalyzer)
 # =============================================================================
 class BaccaratAnalyzer:
     def __init__(self, roadmap):
@@ -91,57 +94,94 @@ class BaccaratAnalyzer:
                 if current_col: grid.append(current_col)
                 roads[name] = grid
         return roads
+    def get_derived_road_features(self):
+        roads_data = self.get_derived_roads_data()
+        features = []
+        for name in ['big_eye', 'small', 'cockroach']:
+            road = roads_data.get(name, [])
+            flat_road = [bead for col in road for bead in col] if road else []
+            if len(flat_road) > 5:
+                window = flat_road[-10:]; red_count = window.count('R')
+                features.append(red_count / len(window))
+            else: features.append(0.5)
+        return features
 
 # =============================================================================
-# 預測函式
+# 獨立預測函式
 # =============================================================================
-def get_lstm_prediction(lstm_model, roadmap_numeric):
-    if len(roadmap_numeric) < LSTM_SEQUENCE_LENGTH: 
-        return "數據不足", 0.5, 0.5
-    sequence = roadmap_numeric[-LSTM_SEQUENCE_LENGTH:].reshape(1, LSTM_SEQUENCE_LENGTH, 1)
-    prediction_prob_p = lstm_model.predict(sequence, verbose=0)[0][0]
-    prediction_prob_b = 1 - prediction_prob_p
+def get_hmm_prediction(hmm_model, roadmap_numeric):
+    try:
+        if len(roadmap_numeric) < 2: return "數據不足"
+        hidden_states = hmm_model.predict(roadmap_numeric)
+        last_state = hidden_states[-1]
+        transition_probs = hmm_model.transmat_[last_state, :]
+        emission_probs = hmm_model.emissionprob_
+        prob_b = np.dot(transition_probs, emission_probs[:, 0])
+        prob_p = np.dot(transition_probs, emission_probs[:, 1])
+        total_prob = prob_b + prob_p
+        if total_prob < 1e-9: return "觀望"
+        prob_b /= total_prob; prob_p /= total_prob
+        if abs(prob_b - prob_p) < 0.04: return "觀望"
+        return "莊" if prob_b > prob_p else "閒"
+    except Exception: return "觀望"
+
+def get_ml_prediction(model, scaler, roadmap):
+    window = roadmap[-N_FEATURES_WINDOW:]
+    b_count=window.count('B'); p_count=window.count('P'); total=b_count+p_count
+    b_ratio=b_count/total if total > 0 else 0.5; p_ratio=p_count/total if total > 0 else 0.5
+    streak=0; last_result=None
+    for item in reversed(window):
+        if item in ['B','P']:
+            if last_result is None: last_result=item; streak=1
+            elif item==last_result: streak+=1
+            else: break
+    streak_type = LABEL_MAP.get(last_result, -1)
+    prev_result = LABEL_MAP.get(window[-1], -1) if window else -1
+    basic_features = [b_ratio, p_ratio, streak, streak_type, prev_result]
+    analyzer = BaccaratAnalyzer(roadmap)
+    derived_features = analyzer.get_derived_road_features()
+    all_features = np.array(basic_features + derived_features).reshape(1, -1)
+    features_scaled = scaler.transform(all_features)
     
-    if abs(prediction_prob_p - 0.5) < 0.03: 
-        suggestion = "觀望"
-    else:
-        suggestion = "閒" if prediction_prob_p > 0.5 else "莊"
-    
-    return suggestion, float(prediction_prob_b), float(prediction_prob_p)
+    pred_prob = model.predict_proba(features_scaled)[0]
+    prediction = REVERSE_MAP[np.argmax(pred_prob)]
+    if float(np.max(pred_prob)) < 0.53: prediction = "觀望" # 信心閥值
+        
+    return prediction, float(pred_prob[0]), float(pred_prob[1])
 
 # =============================================================================
 # API Endpoint
 # =============================================================================
 @app.route("/", methods=["GET"])
-def home(): return jsonify({"status": "online", "model_loaded": 'lstm' in models})
+def home(): return jsonify({"status": "online", "models_loaded": len(models)>0})
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    if 'lstm' not in models: return jsonify({"error": "模型尚未載入，請稍後重試。"}), 503
+    if not models: return jsonify({"error": "模型尚未載入，請稍後重試。"}), 503
     try:
         data = request.get_json(); received_roadmap = data["roadmap"]
         filtered_roadmap = [r for r in received_roadmap if r in ["B", "P"]]
-        
-        analyzer = BaccaratAnalyzer(filtered_roadmap)
-        derived_roads_data = analyzer.get_derived_roads_data()
-        
-        if len(filtered_roadmap) < LSTM_SEQUENCE_LENGTH:
+        if len(filtered_roadmap) < N_FEATURES_WINDOW:
              return jsonify({
                 "banker": 0.5, "player": 0.5, "tie": 0.05,
-                "details": {"suggestion": "數據不足", "derived_roads": derived_roads_data}
+                "details": {"xgb": "數據不足", "hmm": "數據不足", "lgbm": "數據不足", "derived_roads": {}}
             })
         
         roadmap_numeric = np.array([LABEL_MAP[r] for r in filtered_roadmap]).reshape(-1, 1)
 
-        suggestion, banker_prob, player_prob = get_lstm_prediction(models['lstm'], roadmap_numeric)
+        xgb_suggestion, banker_prob, player_prob = get_ml_prediction(models['xgb'], models['scaler'], filtered_roadmap)
+        lgbm_suggestion, _, _ = get_ml_prediction(models['lgbm'], models['scaler'], filtered_roadmap)
+        hmm_suggestion = get_hmm_prediction(models['hmm'], roadmap_numeric)
 
+        analyzer = BaccaratAnalyzer(filtered_roadmap)
+        derived_roads_data = analyzer.get_derived_roads_data()
         tie_prob = 1.0 - (banker_prob + player_prob)
 
         return jsonify({
             "banker": round(banker_prob, 4), "player": round(player_prob, 4),
             "tie": round(tie_prob, 4) if tie_prob > 0 else 0.05,
             "details": {
-                "suggestion": suggestion,
+                "xgb": xgb_suggestion, "hmm": hmm_suggestion, "lgbm": lgbm_suggestion,
                 "derived_roads": derived_roads_data
             }
         })
