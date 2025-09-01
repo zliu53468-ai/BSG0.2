@@ -57,20 +57,18 @@ class BaccaratAnalyzer:
     def _get_derived_bead_color(self, c, r, offset):
         if c < offset: return None
         
-        # 規則1: 齊整 (Neat) - 僅適用於每列的第一個 potential bead (r=0)
         if r == 0:
             return 'R' if self._get_col_len(c - 1) == self._get_col_len(c - offset -1) else 'B'
         
-        # 規則2: 有無 (Has/Hasn't) & 直落 (Straight Drop) - 適用於 r > 0
         ref_bead_exists = r < self._get_col_len(c - offset)
         ref_bead_above_exists = (r - 1) < self._get_col_len(c - offset)
 
         if ref_bead_exists:
-            return 'R' # 有 -> 紅
+            return 'R'
         elif ref_bead_above_exists:
-            return 'B' # 無 -> 藍
+            return 'B'
         
-        return 'B' # 連續兩個空格也是藍
+        return 'B'
 
     def get_derived_roads_data(self):
         roads = {'big_eye': [], 'small': [], 'cockroach': []}
@@ -82,7 +80,7 @@ class BaccaratAnalyzer:
 
             for c in range(offset, len(self.big_road_grid)):
                 start_row = 1 if len(self.big_road_grid[c - 1]) == 1 else 0
-                for r in range(start_row, 6): # Max depth of 6
+                for r in range(start_row, 6):
                     if r >= self._get_col_len(c): break
                     color = self._get_derived_bead_color(c, r, offset)
                     if color: derived_road_flat.append(color)
@@ -205,5 +203,6 @@ def predict():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="host="0.0.0.0", port=port, debug=False)
+    # 【最終語法修正】
+    app.run(host="0.0.0.0", port=port, debug=False)
 
