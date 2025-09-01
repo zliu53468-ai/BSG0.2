@@ -151,19 +151,15 @@ def get_ml_prediction(model, scaler, roadmap):
     return prediction, float(pred_prob[0]), float(pred_prob[1]), probability
 
 def detect_dragon(roadmap):
-    """偵測長龍，回傳(龍的類型, 長度)"""
-    DRAGON_THRESHOLD = 6
-    if len(roadmap) < DRAGON_THRESHOLD:
-        return None, 0
+    """【敏捷化升級】偵測長龍，回傳(龍的類型, 長度)"""
+    DRAGON_THRESHOLD = 3 # 閾值從 4 降低到 3
+    if len(roadmap) < DRAGON_THRESHOLD: return None, 0
     last_result = roadmap[-1]
     streak_len = 0
     for result in reversed(roadmap):
-        if result == last_result:
-            streak_len += 1
-        else:
-            break
-    if streak_len >= DRAGON_THRESHOLD:
-        return last_result, streak_len
+        if result == last_result: streak_len += 1
+        else: break
+    if streak_len >= DRAGON_THRESHOLD: return last_result, streak_len
     return None, 0
 
 # =============================================================================
@@ -198,27 +194,24 @@ def predict():
         xgb_suggestion, banker_prob, player_prob, xgb_prob = get_ml_prediction(models['xgb'], models['scaler'], filtered_roadmap)
         lgbm_suggestion, _, _, lgbm_prob = get_ml_prediction(models['lgbm'], models['scaler'], filtered_roadmap)
         
-        # --- 【核心升級】長龍策略判斷 ---
+        # --- 【敏捷化升級】長龍策略判斷 ---
         dragon_type, streak_len = detect_dragon(filtered_roadmap)
         if dragon_type:
             app.logger.info(f"偵測到長龍: {dragon_type} x {streak_len}")
             dragon_vote = '莊' if dragon_type == 'B' else '閒'
-            BREAK_DRAGON_CONFIDENCE = 0.62
+            BREAK_DRAGON_CONFIDENCE = 0.68 # 斬龍信心閥值提升
 
-            # 檢查 XGB
             if xgb_suggestion != dragon_vote and xgb_prob > BREAK_DRAGON_CONFIDENCE:
-                 app.logger.info(f"XGB 高信心度 ({xgb_prob:.2f}) 斬龍，維持原判: {xgb_suggestion}")
+                 app.logger.info(f"XGB 高信心度 ({xgb_prob:.2f}) 斬龍: {xgb_suggestion}")
             else:
                  xgb_suggestion = dragon_vote
 
-            # 檢查 LGBM
             if lgbm_suggestion != dragon_vote and lgbm_prob > BREAK_DRAGON_CONFIDENCE:
-                app.logger.info(f"LGBM 高信心度 ({lgbm_prob:.2f}) 斬龍，維持原判: {lgbm_suggestion}")
+                app.logger.info(f"LGBM 高信心度 ({lgbm_prob:.2f}) 斬龍: {lgbm_suggestion}")
             else:
                 lgbm_suggestion = dragon_vote
             
-            # HMM 無條件跟龍
-            if hmm_suggestion != '數據不足':
+            if hmm_suggestion not in ['數據不足', '觀望']:
                 hmm_suggestion = dragon_vote
         
         tie_prob = 1.0 - (banker_prob + player_prob)
