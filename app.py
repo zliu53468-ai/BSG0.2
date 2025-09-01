@@ -145,7 +145,7 @@ def get_ml_prediction(model, scaler, roadmap):
     
     pred_prob = model.predict_proba(features_scaled)[0]
     prediction = REVERSE_MAP[np.argmax(pred_prob)]
-    if float(np.max(pred_prob)) < 0.53: prediction = "觀望" # 信心閥值
+    if float(np.max(pred_prob)) < 0.53: prediction = "觀望"
         
     return prediction, float(pred_prob[0]), float(pred_prob[1])
 
@@ -161,20 +161,24 @@ def predict():
     try:
         data = request.get_json(); received_roadmap = data["roadmap"]
         filtered_roadmap = [r for r in received_roadmap if r in ["B", "P"]]
+        
+        # --- 【HMM 修正】HMM 獨立運作 ---
+        roadmap_numeric = np.array([LABEL_MAP[r] for r in filtered_roadmap]).reshape(-1, 1)
+        hmm_suggestion = get_hmm_prediction(models['hmm'], roadmap_numeric)
+        
+        analyzer = BaccaratAnalyzer(filtered_roadmap)
+        derived_roads_data = analyzer.get_derived_roads_data()
+
+        # --- XGB & LGBM 檢查 ---
         if len(filtered_roadmap) < N_FEATURES_WINDOW:
              return jsonify({
                 "banker": 0.5, "player": 0.5, "tie": 0.05,
-                "details": {"xgb": "數據不足", "hmm": "數據不足", "lgbm": "數據不足", "derived_roads": {}}
+                "details": {"xgb": "數據不足", "hmm": hmm_suggestion, "lgbm": "數據不足", "derived_roads": derived_roads_data}
             })
         
-        roadmap_numeric = np.array([LABEL_MAP[r] for r in filtered_roadmap]).reshape(-1, 1)
-
         xgb_suggestion, banker_prob, player_prob = get_ml_prediction(models['xgb'], models['scaler'], filtered_roadmap)
         lgbm_suggestion, _, _ = get_ml_prediction(models['lgbm'], models['scaler'], filtered_roadmap)
-        hmm_suggestion = get_hmm_prediction(models['hmm'], roadmap_numeric)
-
-        analyzer = BaccaratAnalyzer(filtered_roadmap)
-        derived_roads_data = analyzer.get_derived_roads_data()
+        
         tie_prob = 1.0 - (banker_prob + player_prob)
 
         return jsonify({
