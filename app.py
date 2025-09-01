@@ -113,7 +113,7 @@ class BaccaratAnalyzer:
 # =============================================================================
 def get_hmm_prediction(hmm_model, roadmap_numeric):
     try:
-        if len(roadmap_numeric) < 2: return "數據不足"
+        if len(roadmap_numeric) < 2: return "數據不足", 0.5
         hidden_states = hmm_model.predict(roadmap_numeric)
         last_state = hidden_states[-1]
         transition_probs = hmm_model.transmat_[last_state, :]
@@ -121,11 +121,12 @@ def get_hmm_prediction(hmm_model, roadmap_numeric):
         prob_b = np.dot(transition_probs, emission_probs[:, 0])
         prob_p = np.dot(transition_probs, emission_probs[:, 1])
         total_prob = prob_b + prob_p
-        if total_prob < 1e-9: return "觀望"
+        if total_prob < 1e-9: return "觀望", 0.5
         prob_b /= total_prob; prob_p /= total_prob
-        if abs(prob_b - prob_p) < 0.02: return "觀望"
-        return "莊" if prob_b > prob_p else "閒"
-    except Exception: return "觀望"
+        confidence = max(prob_b, prob_p)
+        if abs(prob_b - prob_p) < 0.02: return "觀望", confidence
+        return ("莊" if prob_b > prob_p else "閒"), confidence
+    except Exception: return "觀望", 0.5
 
 def get_ml_prediction(model, scaler, roadmap):
     window = roadmap[-N_FEATURES_WINDOW:]
@@ -151,8 +152,7 @@ def get_ml_prediction(model, scaler, roadmap):
     return prediction, float(pred_prob[0]), float(pred_prob[1]), probability
 
 def detect_dragon(roadmap):
-    """【敏捷化升級】偵測長龍，回傳(龍的類型, 長度)"""
-    DRAGON_THRESHOLD = 3 # 閾值從 4 降低到 3
+    DRAGON_THRESHOLD = 3
     if len(roadmap) < DRAGON_THRESHOLD: return None, 0
     last_result = roadmap[-1]
     streak_len = 0
@@ -180,7 +180,7 @@ def predict():
         filtered_roadmap = [r for r in received_roadmap if r in ["B", "P"]]
         
         roadmap_numeric = np.array([LABEL_MAP[r] for r in filtered_roadmap]).reshape(-1, 1)
-        hmm_suggestion = get_hmm_prediction(models['hmm'], roadmap_numeric)
+        hmm_suggestion, hmm_prob = get_hmm_prediction(models['hmm'], roadmap_numeric)
         
         analyzer = BaccaratAnalyzer(filtered_roadmap)
         derived_roads_data = analyzer.get_derived_roads_data()
@@ -188,18 +188,22 @@ def predict():
         if len(filtered_roadmap) < N_FEATURES_WINDOW:
              return jsonify({
                 "banker": 0.5, "player": 0.5, "tie": 0.05,
-                "details": {"xgb": "數據不足", "hmm": hmm_suggestion, "lgbm": "數據不足", "derived_roads": derived_roads_data}
+                "details": {
+                    "xgb": "數據不足", "xgb_prob": 0.5,
+                    "hmm": hmm_suggestion, "hmm_prob": hmm_prob,
+                    "lgbm": "數據不足", "lgbm_prob": 0.5,
+                    "derived_roads": derived_roads_data
+                }
             })
         
         xgb_suggestion, banker_prob, player_prob, xgb_prob = get_ml_prediction(models['xgb'], models['scaler'], filtered_roadmap)
         lgbm_suggestion, _, _, lgbm_prob = get_ml_prediction(models['lgbm'], models['scaler'], filtered_roadmap)
         
-        # --- 【敏捷化升級】長龍策略判斷 ---
         dragon_type, streak_len = detect_dragon(filtered_roadmap)
         if dragon_type:
             app.logger.info(f"偵測到長龍: {dragon_type} x {streak_len}")
             dragon_vote = '莊' if dragon_type == 'B' else '閒'
-            BREAK_DRAGON_CONFIDENCE = 0.68 # 斬龍信心閥值提升
+            BREAK_DRAGON_CONFIDENCE = 0.68
 
             if xgb_suggestion != dragon_vote and xgb_prob > BREAK_DRAGON_CONFIDENCE:
                  app.logger.info(f"XGB 高信心度 ({xgb_prob:.2f}) 斬龍: {xgb_suggestion}")
@@ -220,7 +224,9 @@ def predict():
             "banker": round(banker_prob, 4), "player": round(player_prob, 4),
             "tie": round(tie_prob, 4) if tie_prob > 0 else 0.05,
             "details": {
-                "xgb": xgb_suggestion, "hmm": hmm_suggestion, "lgbm": lgbm_suggestion,
+                "xgb": xgb_suggestion, "xgb_prob": round(xgb_prob, 2),
+                "hmm": hmm_suggestion, "hmm_prob": round(hmm_prob, 2),
+                "lgbm": lgbm_suggestion, "lgbm_prob": round(lgbm_prob, 2),
                 "derived_roads": derived_roads_data
             }
         })
