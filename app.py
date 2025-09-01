@@ -24,31 +24,28 @@ app.logger.setLevel(logging.INFO)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # =============================================================================
-# 全域變數與模型預載 (改為延遲載入)
+# 全域變數與模型預載
 # =============================================================================
 MODEL_DIR = 'models'
 LABEL_MAP = {'B': 0, 'P': 1}
 REVERSE_MAP = {0: '莊', 1: '閒'}
 N_FEATURES_WINDOW = 20
-models = {} # 初始化為空字典
-models_loaded = False # 新增一個旗標來追蹤模型是否已載入
+models = {}
+models_loaded = False
 
 def load_all_models():
-    """在第一次請求時，才載入所有模型到記憶體"""
     global models, models_loaded
-    if models_loaded: # 如果已載入，直接返回
-        return
+    if models_loaded: return
     try:
-        app.logger.info("⏳ 偵測到首次預測請求，開始載入 AI 專家模型...")
+        app.logger.info("⏳ 首次請求，開始載入 AI 專家模型...")
         models['scaler'] = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
         models['xgb'] = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
         models['hmm'] = joblib.load(os.path.join(MODEL_DIR, 'hmm_model.pkl'))
         models['lgbm'] = joblib.load(os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
-        models_loaded = True # 設置旗標為 True
+        models_loaded = True
         app.logger.info("✅ 所有 AI 專家模型已成功載入記憶體。")
     except Exception as e:
         app.logger.error(f"❌ 載入模型失敗: {e}", exc_info=True)
-        # 即使失敗也將旗標設為 True，避免重複嘗試載入壞掉的模型
         models_loaded = True 
 
 # =============================================================================
@@ -64,10 +61,8 @@ class BaccaratAnalyzer:
         current_col, last_result = [], None
         for result in self.roadmap:
             if result != last_result and last_result is not None:
-                grid.append(current_col)
-                current_col = []
-            current_col.append(result)
-            last_result = result
+                grid.append(current_col); current_col = []
+            current_col.append(result); last_result = result
         if current_col: grid.append(current_col)
         return grid
     def _get_col_len(self, c):
@@ -128,7 +123,7 @@ def get_hmm_prediction(hmm_model, roadmap_numeric):
         total_prob = prob_b + prob_p
         if total_prob < 1e-9: return "觀望"
         prob_b /= total_prob; prob_p /= total_prob
-        if abs(prob_b - prob_p) < 0.04: return "觀望"
+        if abs(prob_b - prob_p) < 0.02: return "觀望"
         return "莊" if prob_b > prob_p else "閒"
     except Exception: return "觀望"
 
@@ -149,12 +144,27 @@ def get_ml_prediction(model, scaler, roadmap):
     derived_features = analyzer.get_derived_road_features()
     all_features = np.array(basic_features + derived_features).reshape(1, -1)
     features_scaled = scaler.transform(all_features)
-    
     pred_prob = model.predict_proba(features_scaled)[0]
     prediction = REVERSE_MAP[np.argmax(pred_prob)]
-    if float(np.max(pred_prob)) < 0.53: prediction = "觀望"
-        
-    return prediction, float(pred_prob[0]), float(pred_prob[1])
+    probability = float(np.max(pred_prob))
+    if probability < 0.51: prediction = "觀望"
+    return prediction, float(pred_prob[0]), float(pred_prob[1]), probability
+
+def detect_dragon(roadmap):
+    """偵測長龍，回傳(龍的類型, 長度)"""
+    DRAGON_THRESHOLD = 6
+    if len(roadmap) < DRAGON_THRESHOLD:
+        return None, 0
+    last_result = roadmap[-1]
+    streak_len = 0
+    for result in reversed(roadmap):
+        if result == last_result:
+            streak_len += 1
+        else:
+            break
+    if streak_len >= DRAGON_THRESHOLD:
+        return last_result, streak_len
+    return None, 0
 
 # =============================================================================
 # API Endpoint
@@ -163,16 +173,12 @@ def get_ml_prediction(model, scaler, roadmap):
 def home(): return jsonify({"status": "online"})
 
 @app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({"status": "healthy"})
+def health_check(): return jsonify({"status": "healthy"})
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    # 【核心修正】在第一次收到請求時，才載入模型
-    if not models_loaded:
-        load_all_models()
-    
-    if not models: return jsonify({"error": "模型檔案遺失或損毀，請重新訓練。"}), 503
+    if not models_loaded: load_all_models()
+    if not models: return jsonify({"error": "模型檔案遺失或損毀。"}), 503
     try:
         data = request.get_json(); received_roadmap = data["roadmap"]
         filtered_roadmap = [r for r in received_roadmap if r in ["B", "P"]]
@@ -189,8 +195,31 @@ def predict():
                 "details": {"xgb": "數據不足", "hmm": hmm_suggestion, "lgbm": "數據不足", "derived_roads": derived_roads_data}
             })
         
-        xgb_suggestion, banker_prob, player_prob = get_ml_prediction(models['xgb'], models['scaler'], filtered_roadmap)
-        lgbm_suggestion, _, _ = get_ml_prediction(models['lgbm'], models['scaler'], filtered_roadmap)
+        xgb_suggestion, banker_prob, player_prob, xgb_prob = get_ml_prediction(models['xgb'], models['scaler'], filtered_roadmap)
+        lgbm_suggestion, _, _, lgbm_prob = get_ml_prediction(models['lgbm'], models['scaler'], filtered_roadmap)
+        
+        # --- 【核心升級】長龍策略判斷 ---
+        dragon_type, streak_len = detect_dragon(filtered_roadmap)
+        if dragon_type:
+            app.logger.info(f"偵測到長龍: {dragon_type} x {streak_len}")
+            dragon_vote = '莊' if dragon_type == 'B' else '閒'
+            BREAK_DRAGON_CONFIDENCE = 0.62
+
+            # 檢查 XGB
+            if xgb_suggestion != dragon_vote and xgb_prob > BREAK_DRAGON_CONFIDENCE:
+                 app.logger.info(f"XGB 高信心度 ({xgb_prob:.2f}) 斬龍，維持原判: {xgb_suggestion}")
+            else:
+                 xgb_suggestion = dragon_vote
+
+            # 檢查 LGBM
+            if lgbm_suggestion != dragon_vote and lgbm_prob > BREAK_DRAGON_CONFIDENCE:
+                app.logger.info(f"LGBM 高信心度 ({lgbm_prob:.2f}) 斬龍，維持原判: {lgbm_suggestion}")
+            else:
+                lgbm_suggestion = dragon_vote
+            
+            # HMM 無條件跟龍
+            if hmm_suggestion != '數據不足':
+                hmm_suggestion = dragon_vote
         
         tie_prob = 1.0 - (banker_prob + player_prob)
 
@@ -207,6 +236,9 @@ def predict():
         return jsonify({"error": "內部伺服器錯誤"}), 500
 
 if __name__ == "__main__":
+    load_all_models()
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False)
+else:
+    load_all_models()
 
