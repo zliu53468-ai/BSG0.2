@@ -659,7 +659,7 @@ def linebot_learn():
 
 # 導入並註冊 LINE BOT 藍圖
 from line_bot_webhook import linebot_bp
-app.register_blueprint(linebot_bp)
+app.register_blueprint(linebot_bp, url_prefix='/linebot')
 
 if __name__ == "__main__":
     load_all_models()
