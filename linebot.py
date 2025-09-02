@@ -39,14 +39,13 @@ def handle_message(event):
     user_id = event.source.user_id
     user_message = event.message.text
     
-    # 檢查會話狀態
-    session_check = check_user_session(user_id)
-    if not session_check.get("active", False):
-        if "message" in session_check:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=session_check["message"])
-            )
+    # 檢查每日使用時間
+    usage_check = check_user_usage(user_id)
+    if not usage_check.get("can_use", False):
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=usage_check.get("message", "今日使用時間已達上限"))
+        )
         return
     
     # 初始化用戶狀態
@@ -54,143 +53,374 @@ def handle_message(event):
         user_states[user_id] = {
             "step": "waiting_roadmap",
             "principal": 5000,
-            "roadmap": []
+            "roadmap": ""
         }
+        send_welcome_message(event)
+        return
+    
+    # 處理幫助指令
+    if user_message.lower() in ['help', '幫助', 'menu', '選單', '說明']:
+        show_help_menu(event, user_id)
+        return
+    
+    # 處理開始指令
+    if user_message in ['開始', 'start', 'go', '分析']:
+        start_prediction(event, user_id)
+        return
     
     # 處理本金選擇
     if user_message in ['5000', '10000', '15000', '20000', '30000', '50000']:
         user_states[user_id]["principal"] = int(user_message)
-        user_states[user_id]["step"] = "waiting_roadmap"
+        
+        if user_states[user_id]["step"] == "waiting_principal":
+            user_states[user_id]["step"] = "ready"
+            # 進行預測
+            make_prediction(event, user_id)
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"✅ 已設定本金為 {user_message} 元\n\n請輸入牌路走勢（例如: 庄,闲,庄,庄,闲,和）")
+            )
+        return
+    
+    # 處理學習指令
+    if user_message.lower() in ['learn', '學習']:
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="請輸入要學習的牌路數據（例如: 庄,闲,庄,庄,闲,和）")
+        )
+        user_states[user_id]["step"] = "waiting_learn"
+        return
+    
+    # 處理狀態查詢
+    if user_message.lower() in ['status', '狀態']:
+        show_status(event, user_id)
+        return
+    
+    # 處理範例指令
+    if user_message in ['範例', 'example', '例子']:
+        show_example(event, user_id)
+        return
+    
+    # 處理學習數據
+    if user_states[user_id]["step"] == "waiting_learn":
+        learn_roadmap(event, user_id, user_message)
+        return
+    
+    # 處理牌路輸入
+    if user_states[user_id]["step"] == "waiting_roadmap":
+        user_states[user_id]["roadmap"] = user_message
+        user_states[user_id]["step"] = "waiting_principal"
         
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(
-                text=f"✅ 已設定本金為 {user_message} 元\n\n請輸入路單數據，格式為: B,P,B,P,B,P,...",
-                quick_reply=QuickReply(items=[])
+                text="✅ 已記錄牌路數據\n\n請選擇本金金額:",
+                quick_reply=QuickReply(items=[
+                    QuickReplyButton(action=MessageAction(label="5000", text="5000")),
+                    QuickReplyButton(action=MessageAction(label="10000", text="10000")),
+                    QuickReplyButton(action=MessageAction(label="15000", text="15000")),
+                    QuickReplyButton(action=MessageAction(label="20000", text="20000")),
+                    QuickReplyButton(action=MessageAction(label="30000", text="30000")),
+                    QuickReplyButton(action=MessageAction(label="50000", text="50000"))
+                ])
             )
         )
         return
     
-    # 處理幫助指令
-    if user_message.lower() in ['help', '幫助', 'menu', '選單']:
-        show_main_menu(event, user_id)
+    # 處理重新預測
+    if user_message.lower() in ['predict', '預測', '重新預測']:
+        user_states[user_id]["step"] = "waiting_roadmap"
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="請輸入當前牌路走勢（例如: 庄,闲,庄,庄,闲,和）")
+        )
         return
-    
-    # 處理路單數據
-    if ',' in user_message:
-        # 處理路單數據
-        roadmap = [x.strip().upper() for x in user_message.split(',')]
-        user_states[user_id]["roadmap"] = roadmap
-        user_states[user_id]["step"] = "waiting_principal"
-        
-        # 顯示本金選擇菜單
-        show_principal_menu(event)
-        return
-    
-    # 處理預測指令
-    if user_message.lower() in ['預測', 'predict', '分析', 'analyze']:
-        if not user_states[user_id]["roadmap"]:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="請先提供路單數據，格式為: B,P,B,P,B,P,...")
-            )
-            return
-        
-        # 呼叫預測API
-        try:
-            import requests
-            response = requests.post(
-                f"{request.host_url}linebot/predict",
-                json={
-                    "roadmap": user_states[user_id]["roadmap"],
-                    "principal": user_states[user_id]["principal"],
-                    "user_id": user_id
-                },
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                prediction = data.get('prediction', '未知')
-                confidence = data.get('confidence', 0) * 100
-                
-                # 構建高科技風格的回覆
-                tech_emojis = "🤖🚀💡⚡🎯🔮"
-                reply_text = f"{tech_emojis} AI 預測分析中 .... {tech_emojis}\n\n"
-                
-                if prediction == "觀望":
-                    reply_text += f"📊 當前建議: 觀望 (信心度: {confidence:.1f}%)\n\n"
-                    reply_text += "建議暫時不要下注，等待更明確的信號。"
-                else:
-                    # 添加下注建議
-                    chinese_prediction = "莊" if prediction == "B" else "閒"
-                    reply_text += f"🎯 下注建議: {chinese_prediction} (信心度: {confidence:.1f}%)\n\n"
-                    
-                    # 添加長龍信息
-                    dragon_info = ""
-                    if data.get('dragon'):
-                        dragon_type = "莊" if data['dragon'] == "B" else "閒"
-                        dragon_info = f"🐉 檢測到長龍: {dragon_type} (連續 {data['streak']} 次)\n\n"
-                    
-                    reply_text += dragon_info
-                    
-                    # 添加注碼策略
-                    reply_text += "💰 本金配注策略:\n"
-                    betting_plan = data.get('betting_plan', [])
-                    for plan in betting_plan:
-                        chinese_suggestion = "莊" if plan['suggestion'] == "B" else "閒" if plan['suggestion'] == "P" else plan['suggestion']
-                        reply_text += f"{plan['name']}: {plan['amount']}元 ({plan['percentage']*100:.0f}%) → {chinese_suggestion}\n"
-                    
-                    reply_text += "\n⚡ 策略說明: 採用過關式注碼，如第一關未過則進入下一關"
-                
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(
-                        text=reply_text,
-                        quick_reply=QuickReply(items=[
-                            QuickReplyButton(
-                                action=MessageAction(label="更改本金", text="menu")
-                            ),
-                            QuickReplyButton(
-                                action=MessageAction(label="重新預測", text="predict")
-                            ),
-                            QuickReplyButton(
-                                action=MessageAction(label="記錄結果", text="記錄結果")
-                            )
-                        ])
-                    )
-                )
-            else:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="❌ 預測服務暫時不可用，請稍後再試")
-                )
-                
-        except Exception as e:
-            print(f"預測錯誤: {e}")
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="❌ 預測時發生錯誤，請稍後再試")
-            )
     
     # 處理記錄結果
-    elif user_message == "記錄結果":
-        show_result_menu(event, user_id)
-    
-    # 處理結果記錄
-    elif user_message in ["莊贏", "閒贏", "和局"]:
+    if user_message in ["庄贏", "閒贏", "和局"]:
         record_bet_result(event, user_id, user_message)
+        return
     
-    else:
-        # 顯示主選單
-        show_main_menu(event, user_id)
+    # 默認回應 - 要求輸入牌路
+    user_states[user_id]["step"] = "waiting_roadmap"
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text="🎯 請輸入當前牌路走勢（例如: 庄,闲,庄,庄,闲,和）")
+    )
 
-def check_user_session(user_id):
-    """檢查用戶會話狀態"""
+def send_welcome_message(event):
+    """發送歡迎消息"""
+    welcome_text = """
+🤖🚀✨ 歡迎使用【BGS AI分析系統】 ✨🚀🤖
+
+🎯 我是您的專業分析助手，提供數據驅動的預測與策略建議！
+
+⭐️ 【使用說明】：
+1️⃣ 輸入當前牌路走勢（格式：庄,闲,庄,和 或 庄闲庄和）
+2️⃣ 選擇本金金額（5000-50000）
+3️⃣ 獲得分析結果與注碼策略
+4️⃣ 記錄實際結果幫助系統優化
+
+💡 您可以隨時輸入「幫助」查看詳細說明
+
+📊 請輸入當前牌路走勢開始使用：
+（例如：庄,闲,庄,庄,闲,和）
+    """
+    
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(
+            text=welcome_text,
+            quick_reply=QuickReply(items=[
+                QuickReplyButton(action=MessageAction(label="查看幫助", text="幫助")),
+                QuickReplyButton(action=MessageAction(label="開始分析", text="開始")),
+                QuickReplyButton(action=MessageAction(label="使用範例", text="範例"))
+            ])
+        )
+    )
+
+def start_prediction(event, user_id):
+    """開始預測流程"""
+    user_states[user_id]["step"] = "waiting_roadmap"
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(
+            text="🎯 請輸入當前牌路走勢：\n（例如：庄,闲,庄,庄,闲,和 或 庄闲庄庄闲和）",
+            quick_reply=QuickReply(items=[
+                QuickReplyButton(action=MessageAction(label="使用範例", text="範例")),
+                QuickReplyButton(action=MessageAction(label="查看幫助", text="幫助"))
+            ])
+        )
+    )
+
+def make_prediction(event, user_id):
+    """進行預測"""
+    try:
+        import requests
+        
+        response = requests.post(
+            f"{request.host_url}linebot/predict",
+            json={
+                "roadmap": user_states[user_id]["roadmap"],
+                "principal": user_states[user_id]["principal"],
+                "user_id": user_id
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            prediction = data.get('prediction', '未知')
+            confidence = data.get('confidence', 0) * 100
+            
+            # 構建BGS AI風格的回覆
+            bgs_emojis = "🔮📊🎯⚡"
+            reply_text = f"{bgs_emojis} BGS AI分析完成 {bgs_emojis}\n\n"
+            
+            if prediction == "觀望":
+                reply_text += f"📊 當前建議: 觀望 (信心度: {confidence:.1f}%)\n\n"
+                reply_text += "建議暫時不要下注，等待更明確的信號。"
+            else:
+                # 添加下注建議
+                chinese_prediction = "庄" if prediction == "B" else "闲"
+                reply_text += f"🎯 BGS建議: {chinese_prediction} (信心度: {confidence:.1f}%)\n\n"
+                
+                # 添加長龍信息
+                dragon_info = ""
+                if data.get('dragon'):
+                    dragon_type = "庄" if data['dragon'] == "B" else "闲"
+                    dragon_info = f"📈 檢測到趨勢: {dragon_type} (連續 {data['streak']} 次)\n\n"
+                
+                reply_text += dragon_info
+                
+                # 添加注碼策略
+                reply_text += "💰 BGS資金分配建議:\n"
+                betting_plan = data.get('betting_plan', [])
+                for plan in betting_plan:
+                    chinese_suggestion = "庄" if plan['suggestion'] == "B" else "闲" if plan['suggestion'] == "P" else plan['suggestion']
+                    reply_text += f"{plan['name']}: {plan['amount']}元 ({plan['percentage']*100:.0f}%) → {chinese_suggestion}\n"
+                
+                reply_text += "\n⚡ BGS策略: 採用漸進式注碼，如第一關未過則進入下一關"
+                
+                # 添加每日剩餘時間
+                remaining = data.get('daily_remaining', 0)
+                reply_text += f"\n⏰ 今日剩餘時間: {int(remaining // 60)}分{int(remaining % 60)}秒"
+            
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text=reply_text,
+                    quick_reply=QuickReply(items=[
+                        QuickReplyButton(action=MessageAction(label="記錄結果", text="記錄結果")),
+                        QuickReplyButton(action=MessageAction(label="重新分析", text="開始")),
+                        QuickReplyButton(action=MessageAction(label="查看狀態", text="狀態"))
+                    ])
+                )
+            )
+        elif response.status_code == 429:
+            # 每日使用時間已達上限
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="❌ 今日使用時間已達15分鐘上限，請明天再使用。")
+            )
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="❌ BGS分析服務暫時不可用，請稍後再試")
+            )
+            
+    except Exception as e:
+        print(f"分析錯誤: {e}")
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="❌ BGS分析時發生錯誤，請稍後再試")
+        )
+
+def learn_roadmap(event, user_id, user_message):
+    """學習新的牌路數據"""
+    try:
+        import requests
+        
+        response = requests.post(
+            f"{request.host_url}linebot/learn",
+            json={"roadmap": user_message},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"✅ {data['message']}")
+            )
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="❌ 學習數據時發生錯誤")
+            )
+        
+        user_states[user_id]["step"] = "waiting_roadmap"
+        
+    except Exception as e:
+        print(f"學習數據錯誤: {e}")
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="❌ 學習數據時發生錯誤")
+        )
+        user_states[user_id]["step"] = "waiting_roadmap"
+
+def show_help_menu(event, user_id):
+    """顯示幫助選單"""
+    help_text = """
+📖 【BGS AI分析系統 - 幫助指南】🤖
+
+⭐️ 主要功能：
+🎯 數據分析 - 基于先進算法分析牌路趨勢
+💰 注碼策略 - 提供科學的資金管理建議
+📊 學習優化 - 不斷提升預測準確性
+⏰ 時間管理 - 每日15分鐘使用限制
+
+⭐️ 使用流程：
+1. 輸入牌路 → 2. 選擇本金 → 3. 獲得分析 → 4. 記錄結果
+
+⭐️ 常用指令：
+• 「開始」 - 開始分析
+• 「幫助」 - 顯示此幫助
+• 「狀態」 - 查看當前狀態
+• 「學習」 - 提交數據幫助系統學習
+• 「範例」 - 查看使用範例
+
+⭐️ 牌路格式：
+庄,闲,庄,庄,闲,和 或 庄闲庄庄闲和
+
+⏰ 每日限制：15分鐘使用時間
+    """
+    
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(
+            text=help_text,
+            quick_reply=QuickReply(items=[
+                QuickReplyButton(action=MessageAction(label="開始分析", text="開始")),
+                QuickReplyButton(action=MessageAction(label="查看範例", text="範例")),
+                QuickReplyButton(action=MessageAction(label="查看狀態", text="狀態"))
+            ])
+        )
+    )
+
+def show_example(event, user_id):
+    """顯示使用範例"""
+    example_text = """
+📝 【BGS AI分析系統 - 使用範例】：
+
+1. 輸入牌路：
+   庄,闲,庄,庄,闲,和
+   或
+   庄闲庄庄闲和
+
+2. 選擇本金：
+   5000/10000/15000/20000/30000/50000
+
+3. 獲得分析：
+   📊 BGS系統會分析牌路並給出建議
+
+4. 記錄結果：
+   根據實際結果輸入「庄贏」、「闲贏」或「和局」
+
+💡 提示：您輸入的數據越多，BGS分析越準確！
+    """
+    
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(
+            text=example_text,
+            quick_reply=QuickReply(items=[
+                QuickReplyButton(action=MessageAction(label="開始使用", text="開始")),
+                QuickReplyButton(action=MessageAction(label="查看幫助", text="幫助"))
+            ])
+        )
+    )
+
+def show_status(event, user_id):
+    """顯示當前狀態"""
+    try:
+        import requests
+        
+        # 檢查使用時間
+        usage_check = check_user_usage(user_id)
+        
+        status_text = "📊 BGS AI分析系統 - 當前狀態\n\n"
+        
+        if usage_check.get("can_use", False):
+            remaining = usage_check.get("remaining", 0)
+            status_text += f"⏰ 今日剩餘時間: {int(remaining // 60)}分{int(remaining % 60)}秒\n"
+            
+            if user_id in user_states:
+                status_text += f"💰 設定本金: {user_states[user_id]['principal']}元\n"
+            
+            status_text += "\n🔄 輸入「開始」進行BGS分析"
+        else:
+            status_text = usage_check.get("message", "今日使用時間已達上限")
+                
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=status_text)
+        )
+            
+    except Exception as e:
+        print(f"獲取狀態錯誤: {e}")
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="❌ 獲取BGS狀態時發生錯誤")
+        )
+
+def check_user_usage(user_id):
+    """檢查用戶使用時間"""
     try:
         import requests
         response = requests.post(
-            f"{request.host_url}linebot/check_session",
+            f"{request.host_url}linebot/check_usage",
             json={"user_id": user_id},
             timeout=5
         )
@@ -198,9 +428,9 @@ def check_user_session(user_id):
         if response.status_code == 200:
             return response.json()
         else:
-            return {"active": True}  # 默認允許訪問
+            return {"can_use": True}
     except:
-        return {"active": True}  # 默認允許訪問
+        return {"can_use": True}
 
 def record_bet_result(event, user_id, result):
     """記錄下注結果"""
@@ -248,7 +478,7 @@ def record_bet_result(event, user_id, result):
         
         # 確定實際結果
         actual_result = ""
-        if result == "莊贏":
+        if result == "庄贏":
             actual_result = "B"
         elif result == "閒贏":
             actual_result = "P"
@@ -272,32 +502,28 @@ def record_bet_result(event, user_id, result):
             win = (prediction == actual_result)
             
             # 構建回覆
-            tech_emojis = "📊🔢✅❌"
-            reply_text = f"{tech_emojis} 下注結果記錄完成 {tech_emojis}\n\n"
-            reply_text += f"預測: {'莊' if prediction == 'B' else '閒'}\n"
+            bgs_emojis = "📊🔢✅❌"
+            reply_text = f"{bgs_emojis} 下注結果記錄完成 {bgs_emojis}\n\n"
+            reply_text += f"預測: {'庄' if prediction == 'B' else '闲'}\n"
             reply_text += f"結果: {result}\n"
             reply_text += f"金額: {amount}元\n"
             reply_text += f"狀態: {'✅ 贏' if win else '❌ 輸'}\n\n"
             
-            # 檢查會話狀態
-            session_check = check_user_session(user_id)
-            if not session_check.get("active", False):
-                reply_text += f"\n{session_check.get('message', '')}"
+            # 檢查使用時間
+            usage_check = check_user_usage(user_id)
+            if usage_check.get("can_use", False):
+                remaining = usage_check.get("remaining", 0)
+                reply_text += f"⏰ 今日剩餘時間: {int(remaining // 60)}分{int(remaining % 60)}秒"
             else:
-                remaining_time = session_check.get('remaining_time', 0)
-                reply_text += f"⏰ 剩餘時間: {int(remaining_time // 60)}分{int(remaining_time % 60)}秒"
+                reply_text += f"⏰ {usage_check.get('message', '今日使用時間已達上限')}"
             
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(
                     text=reply_text,
                     quick_reply=QuickReply(items=[
-                        QuickReplyButton(
-                            action=MessageAction(label="繼續預測", text="predict")
-                        ),
-                        QuickReplyButton(
-                            action=MessageAction(label="查看狀態", text="status")
-                        )
+                        QuickReplyButton(action=MessageAction(label="繼續預測", text="開始")),
+                        QuickReplyButton(action=MessageAction(label="查看狀態", text="狀態"))
                     ])
                 )
             )
@@ -313,80 +539,3 @@ def record_bet_result(event, user_id, result):
             event.reply_token,
             TextSendMessage(text="❌ 記錄結果時發生錯誤")
         )
-
-def show_main_menu(event, user_id):
-    """顯示主選單"""
-    # 檢查會話狀態
-    session_check = check_user_session(user_id)
-    remaining_time = session_check.get('remaining_time', 0)
-    
-    menu_text = "🎯 歡迎使用百家樂AI預測系統\n\n"
-    menu_text += f"⏰ 剩餘時間: {int(remaining_time // 60)}分{int(remaining_time % 60)}秒\n\n"
-    menu_text += "請選擇操作:"
-    
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(
-            text=menu_text,
-            quick_reply=QuickReply(items=[
-                QuickReplyButton(
-                    action=MessageAction(label="設定本金", text="menu")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="開始預測", text="predict")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="使用說明", text="help")
-                )
-            ])
-        )
-    )
-
-def show_principal_menu(event):
-    """顯示本金選擇菜單"""
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(
-            text="請選擇本金金額:",
-            quick_reply=QuickReply(items=[
-                QuickReplyButton(
-                    action=MessageAction(label="5000", text="5000")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="10000", text="10000")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="15000", text="15000")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="20000", text="20000")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="30000", text="30000")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="50000", text="50000")
-                )
-            ])
-        )
-    )
-
-def show_result_menu(event, user_id):
-    """顯示結果記錄菜單"""
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(
-            text="請選擇本局結果:",
-            quick_reply=QuickReply(items=[
-                QuickReplyButton(
-                    action=MessageAction(label="莊贏", text="莊贏")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="閒贏", text="閒贏")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="和局", text="和局")
-                )
-            ])
-        )
-    )
