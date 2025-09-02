@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: your-app-name
-    env: python
-    plan: free
-    buildCommand: "./build.sh"
-    startCommand: "gunicorn app:app"
-    python:
-      version: "3.11.9"
