@@ -12,8 +12,8 @@ from linebot.exceptions import InvalidSignatureError
 line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN', ''))
 handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET', ''))
 
-# 創建藍圖
-linebot_bp = Blueprint('linebot', __name__)
+# 創建藍圖 - 新增 url_prefix='linebot'
+linebot_bp = Blueprint('linebot', __name__, url_prefix='/linebot')
 
 # 用戶狀態跟蹤
 user_states = {}
