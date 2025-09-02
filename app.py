@@ -3,6 +3,8 @@ import os
 import json
 import logging
 import time
+import re
+from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 import numpy as np
 import joblib
@@ -29,58 +31,76 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 # 全域變數與模型預載
 # =============================================================================
 MODEL_DIR = 'models'
-DATA_FILE = 'data/history_data.json'  # 数据保存文件
-LABEL_MAP = {'B': 0, 'P': 1}
-REVERSE_MAP = {0: 'B', 1: 'P'}  # 使用英文代碼，與前端保持一致
+DATA_FILE = 'data/history_data.json'
+LABEL_MAP = {'B': 0, 'P': 1, 'T': 2}
+REVERSE_MAP = {0: 'B', 1: 'P', 2: 'T'}
+CHINESE_MAP = {'庄': 'B', '莊': 'B', '闲': 'P', '閒': 'P', '和': 'T'}
 N_FEATURES_WINDOW = 20
 models = {}
 models_loaded = False
 
 # 用户会话管理
 user_sessions = {}
+user_daily_usage = {}
 
 # 确保数据目录存在
 if not os.path.exists('data'):
     os.makedirs('data')
 
+# 预先喂养的数据
+PRELOADED_DATA = [
+    "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", 
+    "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", 
+    "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", 
+    "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", 
+    "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P",
+    "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", 
+    "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", 
+    "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", 
+    "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", 
+    "P", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", 
+    "T", "T", "B", "P", "B", "B", "B", "T", "T", "B", "B", "P", "B", "T", "P", "B", "P", "B", "P", "P", 
+    "P", "B", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", 
+    "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", 
+    "B", "B", "P", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", 
+    "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", 
+    "P", "B", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", 
+    "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", "P", 
+    "B", "B", "B", "B", "B", "B", "P", "B", "T", "T", "P", "B", "B", "B", "P", "B", "B", "P", "B", "P", 
+    "B", "P", "B", "P", "P", "P", "P", "P", "P", "P", "B", "B", "B", "P", "T", "P", "B", "T", "B", "B", 
+    "B", "B", "T", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "B", "B", "P", "P", "B", "P", 
+    "P", "P", "P", "P", "B", "B", "B", "B", "B", "T", "B", "B", "P", "B", "P", "T", "P", "B", "P", "B", 
+    "B", "P", "B", "B", "B", "P", "P", "P", "B", "P", "P", "B", "P", "P", "B", "B", "P", "P", "B", "P", 
+    "B", "B", "B", "B", "B", "B", "B", "B", "P", "T", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", 
+    "P", "P", "T", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "P", "B", "T", "P", "B", "B", 
+    "P", "B", "P", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "T", "P", 
+    "P", "B", "T", "B", "P", "P", "P", "B", "B", "P", "B", "B", "B", "P", "B", "P", "P", "B", "B", "B", 
+    "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", 
+    "B", "P", "P", "T", "P", "P", "P", "B", "P", "P", "P", "B", "B", "B", "P", "P", "B", "P", "B", "B", 
+    "T", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "T", "B", "T", "P", "B", 
+    "P", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", 
+    "P", "B", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", 
+    "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
+]
+
+def load_all_models():
+    global models, models_loaded
+    if models_loaded: 
+        return
+    try:
+        app.logger.info("⏳ 首次請求，開始載入 AI 專家模型...")
+        models['scaler'] = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
+        models['xgb'] = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
+        models['hmm'] = joblib.load(os.path.join(MODEL_DIR, 'hmm_model.pkl'))
+        models['lgbm'] = joblib.load(os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
+        models_loaded = True
+        app.logger.info("✅ 所有 AI 專家模型已成功載入記憶體。")
+    except Exception as e:
+        app.logger.error(f"❌ 載入模型失敗: {e}", exc_info=True)
+        models_loaded = False
+
 def load_history_data():
-    """加载历史数据，包括初始数据和用户新增数据"""
-    # 初始真实历史数据
-    initial_data = [
-        "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", 
-        "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", 
-        "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", 
-        "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", 
-        "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P",
-        "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", 
-        "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", 
-        "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", 
-        "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", 
-        "P", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", 
-        "T", "T", "B", "P", "B", "B", "B", "T", "T", "B", "B", "P", "B", "T", "P", "B", "P", "B", "P", "P", 
-        "P", "B", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", 
-        "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", 
-        "B", "B", "P", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", 
-        "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", 
-        "P", "B", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", 
-        "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", "P", 
-        "B", "B", "B", "B", "B", "B", "P", "B", "T", "T", "P", "B", "B", "B", "P", "B", "B", "P", "B", "P", 
-        "B", "P", "B", "P", "P", "P", "P", "P", "P", "P", "B", "B", "B", "P", "T", "P", "B", "T", "B", "B", 
-        "B", "B", "T", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "B", "B", "P", "P", "B", "P", 
-        "P", "P", "P", "P", "B", "B", "B", "B", "B", "T", "B", "B", "P", "B", "P", "T", "P", "B", "P", "B", 
-        "B", "P", "B", "B", "B", "P", "P", "P", "B", "P", "P", "B", "P", "P", "B", "B", "P", "P", "B", "P", 
-        "B", "B", "B", "B", "B", "B", "B", "B", "P", "T", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", 
-        "P", "P", "T", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "P", "B", "T", "P", "B", "B", 
-        "P", "B", "P", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "T", "P", 
-        "P", "B", "T", "B", "P", "P", "P", "B", "B", "P", "B", "B", "B", "P", "B", "P", "P", "B", "B", "B", 
-        "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", 
-        "B", "P", "P", "T", "P", "P", "P", "B", "P", "P", "P", "B", "B", "B", "P", "P", "B", "P", "B", "B", 
-        "T", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "T", "B", "T", "P", "B", 
-        "P", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", 
-        "P", "B", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", 
-        "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
-    ]
-    
+    """加载历史数据，包括预先喂养的数据和用户新增数据"""
     # 尝试加载用户新增数据
     user_data = []
     if os.path.exists(DATA_FILE):
@@ -90,8 +110,8 @@ def load_history_data():
         except:
             user_data = []
     
-    # 合并初始数据和用户数据
-    return initial_data + user_data
+    # 合并预先喂养的数据和用户数据
+    return PRELOADED_DATA + user_data
 
 def save_history_data(new_data):
     """保存新的历史数据"""
@@ -113,28 +133,12 @@ def save_history_data(new_data):
     
     return len(existing_data)
 
-def load_all_models():
-    global models, models_loaded
-    if models_loaded: 
-        return
-    try:
-        app.logger.info("⏳ 首次請求，開始載入 AI 專家模型...")
-        models['scaler'] = joblib.load(os.path.join(MODEL_DIR, 'scaler.pkl'))
-        models['xgb'] = joblib.load(os.path.join(MODEL_DIR, 'xgb_model.pkl'))
-        models['hmm'] = joblib.load(os.path.join(MODEL_DIR, 'hmm_model.pkl'))
-        models['lgbm'] = joblib.load(os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
-        models_loaded = True
-        app.logger.info("✅ 所有 AI 專家模型已成功載入記憶體。")
-    except Exception as e:
-        app.logger.error(f"❌ 載入模型失敗: {e}", exc_info=True)
-        models_loaded = False
-
 # =============================================================================
-# 路單分析核心 (BaccaratAnalyzer) - 與train.py中相同
+# 路單分析核心 (BaccaratAnalyzer)
 # =============================================================================
 class BaccaratAnalyzer:
     def __init__(self, roadmap):
-        self.roadmap = [r for r in roadmap if r in ['B', 'P']]
+        self.roadmap = roadmap
         self.big_road_grid = self._generate_big_road_grid()
 
     def _generate_big_road_grid(self):
@@ -202,11 +206,11 @@ class BaccaratAnalyzer:
         return features
 
 # =============================================================================
-# 獨立預測函式 - 更新以匹配train.py的特徵提取
+# 預測函式
 # =============================================================================
 def get_hmm_prediction(hmm_model, roadmap_numeric):
     try:
-        if len(roadmap_numeric) < 10:  # 增加最小數據要求
+        if len(roadmap_numeric) < 10:
             return "數據不足", 0.5
             
         hidden_states = hmm_model.predict(roadmap_numeric)
@@ -224,7 +228,7 @@ def get_hmm_prediction(hmm_model, roadmap_numeric):
         prob_p /= total_prob
         confidence = max(prob_b, prob_p)
         
-        if abs(prob_b - prob_p) < 0.05:  # 放寬觀望閾值
+        if abs(prob_b - prob_p) < 0.05:
             return "觀望", confidence
             
         return ("B" if prob_b > prob_p else "P"), confidence
@@ -242,9 +246,10 @@ def get_ml_prediction(model, scaler, roadmap):
     # 使用最後N個結果作為窗口
     window = roadmap[-N_FEATURES_WINDOW:]
     
-    # 計算基本特徵 - 與train.py保持一致
+    # 計算基本特徵
     b_count = window.count('B')
     p_count = window.count('P')
+    t_count = window.count('T')
     total = b_count + p_count
     
     b_ratio = b_count / total if total > 0 else 0.5
@@ -266,8 +271,7 @@ def get_ml_prediction(model, scaler, roadmap):
     streak_type = LABEL_MAP.get(last_result, -1)
     prev_result = LABEL_MAP.get(window[-1], -1) if window else -1
     
-    # 添加更多特徵 - 與train.py保持一致
-    # 1. 最近5局的勝率
+    # 添加更多特徵
     short_window = roadmap[-5:] if len(roadmap) >= 5 else roadmap
     short_b_count = short_window.count('B')
     short_p_count = short_window.count('P')
@@ -275,18 +279,16 @@ def get_ml_prediction(model, scaler, roadmap):
     short_b_ratio = short_b_count / short_total if short_total > 0 else 0.5
     short_p_ratio = short_p_count / short_total if short_total > 0 else 0.5
     
-    # 2. 歷史總勝率
     total_b_count = roadmap.count('B')
     total_p_count = roadmap.count('P')
     total_ratio = total_b_count / (total_b_count + total_p_count) if (total_b_count + total_p_count) > 0 else 0.5
     
-    # 3. 最近10局的變化趨勢
     trend_window = roadmap[-10:] if len(roadmap) >= 10 else roadmap
     trend_changes = 0
     for j in range(1, len(trend_window)):
         if trend_window[j] != trend_window[j-1]:
             trend_changes += 1
-    trend_volatility = trend_changes / len(trend_window) if len(trend_window) > 0 else 0
+    trend_volatility = trend_changes / len(ttrend_window) if len(trend_window) > 0 else 0
     
     basic_features = [
         b_ratio, p_ratio, 
@@ -311,7 +313,7 @@ def get_ml_prediction(model, scaler, roadmap):
     probability = float(np.max(pred_prob))
     
     # 如果信心不足，建議觀望
-    if probability < 0.55:  # 提高信心閾值
+    if probability < 0.55:
         prediction = "觀望"
         
     return prediction, float(pred_prob[0]), float(pred_prob[1]), probability
@@ -374,6 +376,72 @@ def calculate_profit(user_id):
     
     return total_profit
 
+def parse_chinese_roadmap(user_input):
+    """解析中文牌路輸入"""
+    # 移除所有空格和換行符
+    cleaned_input = re.sub(r'\s+', '', user_input)
+    
+    # 分割輸入
+    if '，' in cleaned_input:
+        roadmap = cleaned_input.split('，')
+    elif ',' in cleaned_input:
+        roadmap = cleaned_input.split(',')
+    else:
+        # 處理連續中文輸入
+        roadmap = []
+        for char in cleaned_input:
+            if char in CHINESE_MAP:
+                roadmap.append(char)
+    
+    # 轉換為英文代碼
+    english_roadmap = []
+    for result in roadmap:
+        if result in CHINESE_MAP:
+            english_roadmap.append(CHINESE_MAP[result])
+        elif result in ['B', 'P', 'T']:
+            english_roadmap.append(result)
+    
+    return english_roadmap
+
+def check_daily_usage(user_id):
+    """檢查用戶每日使用時間"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    if user_id not in user_daily_usage:
+        user_daily_usage[user_id] = {
+            "date": today,
+            "usage_seconds": 0,
+            "last_start": None
+        }
+        return True, 0
+    
+    user_usage = user_daily_usage[user_id]
+    
+    # 檢查是否是新的一天
+    if user_usage["date"] != today:
+        user_usage["date"] = today
+        user_usage["usage_seconds"] = 0
+        user_usage["last_start"] = None
+        return True, 0
+    
+    # 檢查是否超過15分鐘（900秒）
+    if user_usage["usage_seconds"] >= 900:
+        return False, user_usage["usage_seconds"]
+    
+    return True, 900 - user_usage["usage_seconds"]
+
+def update_daily_usage(user_id, seconds):
+    """更新用戶每日使用時間"""
+    if user_id not in user_daily_usage:
+        today = datetime.now().strftime("%Y-%m-%d")
+        user_daily_usage[user_id] = {
+            "date": today,
+            "usage_seconds": seconds,
+            "last_start": None
+        }
+    else:
+        user_daily_usage[user_id]["usage_seconds"] += seconds
+
 # =============================================================================
 # API Endpoint
 # =============================================================================
@@ -385,160 +453,9 @@ def home():
 def health_check(): 
     return jsonify({"status": "healthy"})
 
-@app.route("/save_data", methods=["POST"])
-def save_data():
-    """保存新的历史数据"""
-    try:
-        data = request.get_json()
-        new_results = data.get("results", [])
-        
-        if not new_results:
-            return jsonify({"error": "没有提供数据"}), 400
-            
-        # 保存数据
-        count = save_history_data(new_results)
-        return jsonify({"message": f"成功保存 {len(new_results)} 条数据，总共 {count} 条数据"})
-    except Exception as e:
-        app.logger.error(f"保存数据时发生错误: {e}", exc_info=True)
-        return jsonify({"error": "内部服务器错误"}), 500
-
-@app.route("/retrain", methods=["POST"])
-def retrain():
-    """重新训练模型"""
-    try:
-        from train import train_models, extract_features
-        
-        # 加载所有历史数据
-        history_data = load_history_data()
-        print(f"使用 {len(history_data)} 筆歷史數據進行訓練")
-        
-        # 提取特徵和標籤
-        X, y = extract_features(history_data)
-        
-        # 训练模型
-        success = train_models(X, y, history_data, lightweight=True)
-        
-        if success:
-            # 重新加载模型
-            global models_loaded
-            models_loaded = False
-            load_all_models()
-            
-            return jsonify({"message": "模型重新训练成功"})
-        else:
-            return jsonify({"error": "模型训练失败"}), 500
-            
-    except Exception as e:
-        app.logger.error(f"重新训练时发生错误: {e}", exc_info=True)
-        return jsonify({"error": "内部服务器错误"}), 500
-
-@app.route("/predict", methods=["POST"])
-def predict():
-    if not models_loaded: 
-        load_all_models()
-        
-    if not models: 
-        return jsonify({"error": "模型檔案遺失或損毀。"}), 503
-        
-    try:
-        data = request.get_json()
-        received_roadmap = data["roadmap"]
-        # 只保留B和P，過濾其他結果
-        filtered_roadmap = [r for r in received_roadmap if r in ["B", "P"]]
-        
-        # 轉換為數值格式供HMM使用
-        roadmap_numeric = np.array([LABEL_MAP[r] for r in filtered_roadmap]).reshape(-1, 1)
-        
-        # 獲取HMM預測
-        hmm_suggestion, hmm_prob = get_hmm_prediction(models['hmm'], roadmap_numeric)
-        
-        # 獲取衍生路數據
-        analyzer = BaccaratAnalyzer(filtered_roadmap)
-        derived_roads_data = analyzer.get_derived_roads_data()
-
-        # 檢查數據是否足夠
-        if len(filtered_roadmap) < N_FEATURES_WINDOW:
-            return jsonify({
-                "banker": 0.5, 
-                "player": 0.5, 
-                "tie": 0.0,
-                "details": {
-                    "xgb": "數據不足", 
-                    "xgb_prob": 0.5,
-                    "hmm": hmm_suggestion, 
-                    "hmm_prob": hmm_prob,
-                    "lgbm": "數據不足", 
-                    "lgbm_prob": 0.5,
-                    "derived_roads": derived_roads_data
-                }
-            })
-        
-        # 獲取XGBoost和LightGBM預測
-        xgb_suggestion, banker_prob, player_prob, xgb_prob = get_ml_prediction(
-            models['xgb'], models['scaler'], filtered_roadmap
-        )
-        lgbm_suggestion, _, _, lgbm_prob = get_ml_prediction(
-            models['lgbm'], models['scaler'], filtered_roadmap
-        )
-        
-        # 檢查長龍
-        dragon_type, streak_len = detect_dragon(filtered_roadmap)
-        if dragon_type:
-            app.logger.info(f"偵測到長龍: {dragon_type} x {streak_len}")
-            dragon_vote = 'B' if dragon_type == 'B' else 'P'
-            BREAK_DRAGON_CONFIDENCE = 0.70  # 提高斬龍信心要求
-
-            # 只有當模型信心非常高時才允許斬龍
-            if xgb_suggestion != dragon_vote and xgb_prob > BREAK_DRAGON_CONFIDENCE:
-                app.logger.info(f"XGB 高信心度 ({xgb_prob:.2f}) 斬龍: {xgb_suggestion}")
-            else:
-                xgb_suggestion = dragon_vote
-                xgb_prob = max(xgb_prob, 0.6)  # 提高跟龍時的顯示信心
-
-            if lgbm_suggestion != dragon_vote and lgbm_prob > BREAK_DRAGON_CONFIDENCE:
-                app.logger.info(f"LGBM 高信心度 ({lgbm_prob:.2f}) 斬龍: {lgbm_suggestion}")
-            else:
-                lgbm_suggestion = dragon_vote
-                lgbm_prob = max(lgbm_prob, 0.6)  # 提高跟龍時的顯示信心
-            
-            # HMM也跟隨長龍
-            if hmm_suggestion not in ['數據不足', '觀望']:
-                hmm_suggestion = dragon_vote
-                hmm_prob = max(hmm_prob, 0.6)  # 提高跟龍時的顯示信心
-        
-        # 計算和局概率 (固定小值)
-        tie_prob = 0.05  # 和局概率固定為5%
-        
-        # 正規化莊閒概率
-        total = banker_prob + player_prob
-        if total > 0:
-            banker_prob = banker_prob / total * (1 - tie_prob)
-            player_prob = player_prob / total * (1 - tie_prob)
-        
-        return jsonify({
-            "banker": round(banker_prob, 4), 
-            "player": round(player_prob, 4),
-            "tie": round(tie_prob, 4),
-            "details": {
-                "xgb": xgb_suggestion, 
-                "xgb_prob": round(xgb_prob, 2),
-                "hmm": hmm_suggestion, 
-                "hmm_prob": round(hmm_prob, 2),
-                "lgbm": lgbm_suggestion, 
-                "lgbm_prob": round(lgbm_prob, 2),
-                "derived_roads": derived_roads_data
-            }
-        })
-    except Exception as e:
-        app.logger.error(f"預測時發生錯誤: {e}", exc_info=True)
-        return jsonify({"error": "內部伺服器錯誤"}), 500
-
-# =============================================================================
-# LINE BOT 專用端點
-# =============================================================================
 @app.route("/linebot/predict", methods=["POST"])
 def linebot_predict():
-    """LINE BOT 專用預測端點，返回簡化結果"""
+    """LINE BOT 專用預測端點"""
     if not models_loaded: 
         load_all_models()
         
@@ -547,9 +464,31 @@ def linebot_predict():
         
     try:
         data = request.get_json()
-        received_roadmap = data.get("roadmap", [])
-        principal = data.get("principal", 5000)  # 預設本金為5000
+        user_input = data.get("roadmap", "")
+        principal = data.get("principal", 5000)
         user_id = data.get("user_id", "unknown")
+        
+        # 檢查每日使用時間
+        can_use, remaining = check_daily_usage(user_id)
+        if not can_use:
+            return jsonify({
+                "error": "daily_limit_exceeded",
+                "message": f"今日使用時間已達15分鐘上限，請明天再使用。"
+            }), 429
+        
+        # 解析中文牌路輸入
+        roadmap = parse_chinese_roadmap(user_input)
+        
+        if not roadmap:
+            return jsonify({
+                "prediction": "數據不足",
+                "message": "請提供有效的牌路數據（庄、闲、和）",
+                "confidence": 0.5,
+                "banker_prob": 0.5,
+                "player_prob": 0.5,
+                "tie_prob": 0.0,
+                "betting_plan": []
+            })
         
         # 初始化用戶會話
         if user_id not in user_sessions:
@@ -557,20 +496,18 @@ def linebot_predict():
                 "start_time": time.time(),
                 "principal": principal,
                 "bets": [],
-                "roadmap": received_roadmap
+                "roadmap": roadmap
             }
         else:
             # 更新用戶會話
             user_sessions[user_id]["principal"] = principal
-            user_sessions[user_id]["roadmap"] = received_roadmap
-        
-        # 只保留B和P，過濾其他結果
-        filtered_roadmap = [r for r in received_roadmap if r in ["B", "P"]]
+            user_sessions[user_id]["roadmap"] = roadmap
         
         # 檢查數據是否足夠
-        if len(filtered_roadmap) < N_FEATURES_WINDOW:
+        if len(roadmap) < N_FEATURES_WINDOW:
             return jsonify({
                 "prediction": "數據不足",
+                "message": f"需要至少 {N_FEATURES_WINDOW} 局歷史數據，當前只有 {len(roadmap)} 局",
                 "confidence": 0.5,
                 "banker_prob": 0.5,
                 "player_prob": 0.5,
@@ -580,16 +517,15 @@ def linebot_predict():
         
         # 獲取XGBoost預測
         xgb_suggestion, banker_prob, player_prob, xgb_prob = get_ml_prediction(
-            models['xgb'], models['scaler'], filtered_roadmap
+            models['xgb'], models['scaler'], roadmap
         )
         
         # 檢查長龍
-        dragon_type, streak_len = detect_dragon(filtered_roadmap)
+        dragon_type, streak_len = detect_dragon(roadmap)
         if dragon_type:
             dragon_vote = 'B' if dragon_type == 'B' else 'P'
             BREAK_DRAGON_CONFIDENCE = 0.70
             
-            # 只有當模型信心非常高時才允許斬龍
             if xgb_suggestion != dragon_vote and xgb_prob > BREAK_DRAGON_CONFIDENCE:
                 pass  # 保持原預測
             else:
@@ -608,6 +544,9 @@ def linebot_predict():
         # 計算注碼策略
         betting_plan = calculate_betting_plan(principal, xgb_suggestion, xgb_prob)
         
+        # 更新使用時間（假設每次預測使用10秒）
+        update_daily_usage(user_id, 10)
+        
         # 為LINE BOT簡化響應格式
         return jsonify({
             "prediction": xgb_suggestion,
@@ -617,63 +556,37 @@ def linebot_predict():
             "tie_prob": round(tie_prob, 4),
             "dragon": dragon_type if dragon_type else None,
             "streak": streak_len if dragon_type else 0,
-            "betting_plan": betting_plan
+            "betting_plan": betting_plan,
+            "roadmap_length": len(roadmap),
+            "daily_remaining": remaining - 10
         })
     except Exception as e:
         app.logger.error(f"LINE BOT 預測時發生錯誤: {e}", exc_info=True)
         return jsonify({"error": "內部伺服器錯誤"}), 500
 
-@app.route("/linebot/check_session", methods=["POST"])
-def linebot_check_session():
-    """檢查用戶會話狀態"""
+@app.route("/linebot/check_usage", methods=["POST"])
+def linebot_check_usage():
+    """檢查用戶使用時間"""
     try:
         data = request.get_json()
         user_id = data.get("user_id", "unknown")
         
-        if user_id not in user_sessions:
+        can_use, remaining = check_daily_usage(user_id)
+        
+        if not can_use:
             return jsonify({
-                "active": False,
-                "message": "會話不存在"
+                "can_use": False,
+                "message": f"今日使用時間已達15分鐘上限，請明天再使用。"
             })
         
-        session = user_sessions[user_id]
-        elapsed_time = time.time() - session["start_time"]
-        remaining_time = max(0, 900 - elapsed_time)  # 15分鐘 = 900秒
-        
-        # 檢查是否超過15分鐘
-        if elapsed_time >= 900:
-            profit = calculate_profit(user_id)
-            
-            # 高科技風格的回覆
-            tech_emojis = "🤖🚀💎🎯✨🔥"
-            message = f"{tech_emojis} 會話時間已到期 {tech_emojis}\n\n"
-            message += f"⏰ 本次會話時間: 15分鐘\n"
-            message += f"💰 最終盈利: {profit}元\n\n"
-            
-            if profit > 0:
-                message += f"🎉 恭喜獲利！表現出色！{tech_emojis}"
-            elif profit == 0:
-                message += f"➖ 持平表現，下次再戰！{tech_emojis}"
-            else:
-                message += f"📉 虧損狀態，請調整策略！{tech_emojis}"
-            
-            # 刪除會話
-            del user_sessions[user_id]
-            
-            return jsonify({
-                "active": False,
-                "message": message,
-                "profit": profit
-            })
-        else:
-            return jsonify({
-                "active": True,
-                "remaining_time": remaining_time,
-                "message": f"會話還剩 {int(remaining_time // 60)}分{int(remaining_time % 60)}秒"
-            })
+        return jsonify({
+            "can_use": True,
+            "remaining": remaining,
+            "message": f"今日還剩 {int(remaining // 60)}分{int(remaining % 60)}秒可用時間"
+        })
             
     except Exception as e:
-        app.logger.error(f"檢查會話時發生錯誤: {e}", exc_info=True)
+        app.logger.error(f"檢查使用時間時發生錯誤: {e}", exc_info=True)
         return jsonify({"error": "內部伺服器錯誤"}), 500
 
 @app.route("/linebot/record_bet", methods=["POST"])
@@ -704,10 +617,44 @@ def linebot_record_bet():
             "result": result
         })
         
+        # 更新使用時間（假設記錄結果使用5秒）
+        update_daily_usage(user_id, 5)
+        
         return jsonify({"message": "下注記錄成功"})
         
     except Exception as e:
         app.logger.error(f"記錄下注時發生錯誤: {e}", exc_info=True)
+        return jsonify({"error": "內部伺服器錯誤"}), 500
+
+@app.route("/linebot/learn", methods=["POST"])
+def linebot_learn():
+    """學習新的牌路數據"""
+    try:
+        data = request.get_json()
+        user_input = data.get("roadmap", "")
+        
+        # 解析中文牌路輸入
+        roadmap = parse_chinese_roadmap(user_input)
+        
+        if not roadmap:
+            return jsonify({"error": "無效的牌路數據"}), 400
+        
+        # 加載現有數據
+        existing_data = load_history_data()
+        
+        # 添加新數據
+        existing_data.extend(roadmap)
+        
+        # 保存數據
+        save_history_data(roadmap)
+        
+        return jsonify({
+            "message": f"成功學習 {len(roadmap)} 筆新數據，總數據量: {len(existing_data)}",
+            "total_data": len(existing_data)
+        })
+        
+    except Exception as e:
+        app.logger.error(f"學習數據時發生錯誤: {e}", exc_info=True)
         return jsonify({"error": "內部伺服器錯誤"}), 500
 
 if __name__ == "__main__":
