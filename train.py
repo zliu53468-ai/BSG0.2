@@ -21,42 +21,6 @@ N_FEATURES_WINDOW = 20
 LABEL_MAP = {'B': 0, 'P': 1}
 REVERSE_MAP = {0: 'B', 1: 'P'}  # 預測時使用英文代碼，與前端保持一致
 
-# 真實歷史數據 (完整版)
-REAL_HISTORY_DATA = [
-    "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", 
-    "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", 
-    "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", 
-    "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", 
-    "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P",
-    "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", 
-    "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", 
-    "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", 
-    "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", 
-    "P", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", 
-    "T", "T", "B", "P", "B", "B", "B", "T", "T", "B", "B", "P", "B", "T", "P", "B", "P", "B", "P", "P", 
-    "P", "B", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", 
-    "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", 
-    "B", "B", "P", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", 
-    "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", 
-    "P", "B", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", 
-    "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", "P", 
-    "B", "B", "B", "B", "B", "B", "P", "B", "T", "T", "P", "B", "B", "B", "P", "B", "B", "P", "B", "P", 
-    "B", "P", "B", "P", "P", "P", "P", "P", "P", "P", "B", "B", "B", "P", "T", "P", "B", "T", "B", "B", 
-    "B", "B", "T", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "B", "B", "P", "P", "B", "P", 
-    "P", "P", "P", "P", "B", "B", "B", "B", "B", "T", "B", "B", "P", "B", "P", "T", "P", "B", "P", "B", 
-    "B", "P", "B", "B", "B", "P", "P", "P", "B", "P", "P", "B", "P", "P", "B", "B", "P", "P", "B", "P", 
-    "B", "B", "B", "B", "B", "B", "B", "B", "P", "T", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", 
-    "P", "P", "T", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "P", "B", "T", "P", "B", "B", 
-    "P", "B", "P", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "T", "P", 
-    "P", "B", "T", "B", "P", "P", "P", "B", "B", "P", "B", "B", "B", "P", "B", "P", "P", "B", "B", "B", 
-    "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", 
-    "B", "P", "P", "T", "P", "P", "P", "B", "P", "P", "P", "B", "B", "B", "P", "P", "B", "P", "B", "B", 
-    "T", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "T", "B", "T", "P", "B", 
-    "P", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", 
-    "P", "B", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", 
-    "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
-]
-
 # =============================================================================
 # 路單分析核心 (BaccaratAnalyzer) - 保持不變
 # =============================================================================
@@ -217,30 +181,27 @@ def extract_features(full_roadmap):
         
     return np.array(features_list), np.array(labels)
 
-def train(lightweight=False):
+def train_models(X, y, roadmap, lightweight=False):
+    """訓練模型的核心函數，可被外部調用"""
     print("="*50)
-    print("開始重新訓練 AI 模型 (使用正確的時間序列方法)...")
+    print("開始訓練 AI 模型...")
     print("="*50)
     
     if not os.path.exists(MODEL_DIR):
         os.makedirs(MODEL_DIR)
         print(f"✅ 已建立目錄: {MODEL_DIR}")
     
-    # 只使用真實數據，不再生成合成數據
-    roadmap = [r for r in REAL_HISTORY_DATA if r in ['B', 'P']]
-    print(f"✅ 使用 {len(roadmap)} 筆真實歷史數據進行訓練")
-    
     # 轉換為數值格式供HMM使用
-    roadmap_numeric = np.array([LABEL_MAP[r] for r in roadmap]).reshape(-1, 1)
+    roadmap_numeric = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
     
     # --- 1. 訓練 HMM 專家 ---
     print("\n--- [開始訓練 HMM 專家] ---")
     try:
         hmm_model = hmm.CategoricalHMM(
             n_components=2, 
-            n_iter=100 if lightweight else 200,  # 恢复更多迭代次数
+            n_iter=100 if lightweight else 200,
             random_state=42, 
-            tol=1e-3,  # 恢复更严格的容忍度
+            tol=1e-3,
             init_params="ste"
         )
         hmm_model.fit(roadmap_numeric)
@@ -248,16 +209,14 @@ def train(lightweight=False):
         print("✅ HMM 專家 (hmm_model.pkl) 已儲存。")
     except Exception as e:
         print(f"❌ HMM 訓練失敗: {e}")
-        return
+        return False
     
     # --- 2. 訓練 XGBoost & LightGBM 專家 ---
     print("\n--- [開始訓練 XGBoost & LightGBM 專家] ---")
     
-    # 提取特徵和標籤
-    X, y = extract_features(roadmap)
     if len(X) == 0:
         print("❌ 特徵提取失敗 - 數據不足")
-        return
+        return False
         
     print(f"✅ 成功提取 {X.shape[0]} 個樣本，每個樣本有 {X.shape[1]} 個特徵")
     
@@ -281,10 +240,10 @@ def train(lightweight=False):
         objective='binary:logistic', 
         eval_metric='logloss', 
         n_estimators=n_estimators, 
-        learning_rate=0.05,  # 适中的学习率
+        learning_rate=0.05,
         max_depth=max_depth,
-        subsample=0.8,  # 添加子采样防止过拟合
-        colsample_bytree=0.8,  # 添加列采样防止过拟合
+        subsample=0.8,
+        colsample_bytree=0.8,
         use_label_encoder=False, 
         random_state=42
     )
@@ -297,12 +256,12 @@ def train(lightweight=False):
         objective='binary', 
         metric='binary_logloss', 
         n_estimators=n_estimators, 
-        learning_rate=0.05,  # 适中的学习率
+        learning_rate=0.05,
         max_depth=max_depth,
-        subsample=0.8,  # 添加子采样防止过拟合
-        colsample_bytree=0.8,  # 添加列采样防止过拟合
+        subsample=0.8,
+        colsample_bytree=0.8,
         random_state=42,
-        verbose=-1  # 减少输出
+        verbose=-1
     )
     lgbm_model.fit(X_scaled, y)
     joblib.dump(lgbm_model, os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
@@ -361,6 +320,21 @@ def train(lightweight=False):
     print(f"   LightGBM: {lgbm_train_score:.4f}")
     
     print("\n🎉 所有專家模型已成功訓練並儲存！")
+    return True
+
+def train(lightweight=False):
+    """主要訓練函數，用於命令行調用"""
+    # 從文件加載歷史數據
+    from app import load_history_data
+    history_data = load_history_data()
+    
+    print(f"✅ 使用 {len(history_data)} 筆歷史數據進行訓練")
+    
+    # 提取特徵和標籤
+    X, y = extract_features(history_data)
+    
+    # 訓練模型
+    return train_models(X, y, history_data, lightweight)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='训练百家乐预测模型')
