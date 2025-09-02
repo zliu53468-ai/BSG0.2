@@ -28,11 +28,86 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 # 全域變數與模型預載
 # =============================================================================
 MODEL_DIR = 'models'
+DATA_FILE = 'data/history_data.json'  # 数据保存文件
 LABEL_MAP = {'B': 0, 'P': 1}
 REVERSE_MAP = {0: 'B', 1: 'P'}  # 使用英文代碼，與前端保持一致
 N_FEATURES_WINDOW = 20
 models = {}
 models_loaded = False
+
+# 确保数据目录存在
+if not os.path.exists('data'):
+    os.makedirs('data')
+
+def load_history_data():
+    """加载历史数据，包括初始数据和用户新增数据"""
+    # 初始真实历史数据
+    initial_data = [
+        "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", 
+        "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", 
+        "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", 
+        "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", 
+        "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P",
+        "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", 
+        "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", 
+        "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", 
+        "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", 
+        "P", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", 
+        "T", "T", "B", "P", "B", "B", "B", "T", "T", "B", "B", "P", "B", "T", "P", "B", "P", "B", "P", "P", 
+        "P", "B", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", 
+        "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", 
+        "B", "B", "P", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", 
+        "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", 
+        "P", "B", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", 
+        "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", "P", 
+        "B", "B", "B", "B", "B", "B", "P", "B", "T", "T", "P", "B", "B", "B", "P", "B", "B", "P", "B", "P", 
+        "B", "P", "B", "P", "P", "P", "P", "P", "P", "P", "B", "B", "B", "P", "T", "P", "B", "T", "B", "B", 
+        "B", "B", "T", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "B", "B", "P", "P", "B", "P", 
+        "P", "P", "P", "P", "B", "B", "B", "B", "B", "T", "B", "B", "P", "B", "P", "T", "P", "B", "P", "B", 
+        "B", "P", "B", "B", "B", "P", "P", "P", "B", "P", "P", "B", "P", "P", "B", "B", "P", "P", "B", "P", 
+        "B", "B", "B", "B", "B", "B", "B", "B", "P", "T", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", 
+        "P", "P", "T", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "P", "B", "T", "P", "B", "B", 
+        "P", "B", "P", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "T", "P", 
+        "P", "B", "T", "B", "P", "P", "P", "B", "B", "P", "B", "B", "B", "P", "B", "P", "P", "B", "B", "B", 
+        "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", 
+        "B", "P", "P", "T", "P", "P", "P", "B", "P", "P", "P", "B", "B", "B", "P", "P", "B", "P", "B", "B", 
+        "T", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "T", "B", "T", "P", "B", 
+        "P", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", 
+        "P", "B", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", 
+        "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
+    ]
+    
+    # 尝试加载用户新增数据
+    user_data = []
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'r') as f:
+                user_data = json.load(f)
+        except:
+            user_data = []
+    
+    # 合并初始数据和用户数据
+    return initial_data + user_data
+
+def save_history_data(new_data):
+    """保存新的历史数据"""
+    # 加载现有用户数据
+    existing_data = []
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'r') as f:
+                existing_data = json.load(f)
+        except:
+            existing_data = []
+    
+    # 添加新数据
+    existing_data.extend(new_data)
+    
+    # 保存数据
+    with open(DATA_FILE, 'w') as f:
+        json.dump(existing_data, f)
+    
+    return len(existing_data)
 
 def load_all_models():
     global models, models_loaded
@@ -265,6 +340,53 @@ def home():
 @app.route('/health', methods=['GET'])
 def health_check(): 
     return jsonify({"status": "healthy"})
+
+@app.route("/save_data", methods=["POST"])
+def save_data():
+    """保存新的历史数据"""
+    try:
+        data = request.get_json()
+        new_results = data.get("results", [])
+        
+        if not new_results:
+            return jsonify({"error": "没有提供数据"}), 400
+            
+        # 保存数据
+        count = save_history_data(new_results)
+        return jsonify({"message": f"成功保存 {len(new_results)} 条数据，总共 {count} 条数据"})
+    except Exception as e:
+        app.logger.error(f"保存数据时发生错误: {e}", exc_info=True)
+        return jsonify({"error": "内部服务器错误"}), 500
+
+@app.route("/retrain", methods=["POST"])
+def retrain():
+    """重新训练模型"""
+    try:
+        from train import train_models, extract_features
+        
+        # 加载所有历史数据
+        history_data = load_history_data()
+        print(f"使用 {len(history_data)} 筆歷史數據進行訓練")
+        
+        # 提取特徵和標籤
+        X, y = extract_features(history_data)
+        
+        # 训练模型
+        success = train_models(X, y, history_data, lightweight=True)
+        
+        if success:
+            # 重新加载模型
+            global models_loaded
+            models_loaded = False
+            load_all_models()
+            
+            return jsonify({"message": "模型重新训练成功"})
+        else:
+            return jsonify({"error": "模型训练失败"}), 500
+            
+    except Exception as e:
+        app.logger.error(f"重新训练时发生错误: {e}", exc_info=True)
+        return jsonify({"error": "内部服务器错误"}), 500
 
 @app.route("/predict", methods=["POST"])
 def predict():
