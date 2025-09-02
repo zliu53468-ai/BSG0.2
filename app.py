@@ -2,6 +2,7 @@
 import os
 import json
 import logging
+import time
 from logging.handlers import RotatingFileHandler
 import numpy as np
 import joblib
@@ -34,6 +35,9 @@ REVERSE_MAP = {0: 'B', 1: 'P'}  # 使用英文代碼，與前端保持一致
 N_FEATURES_WINDOW = 20
 models = {}
 models_loaded = False
+
+# 用户会话管理
+user_sessions = {}
 
 # 确保数据目录存在
 if not os.path.exists('data'):
@@ -330,6 +334,46 @@ def detect_dragon(roadmap):
         
     return None, 0
 
+def calculate_betting_plan(principal, prediction, confidence):
+    """計算注碼策略"""
+    betting_plan = []
+    levels = [
+        {"level": 1, "percentage": 0.05, "name": "第一關"},
+        {"level": 2, "percentage": 0.10, "name": "第二關"},
+        {"level": 3, "percentage": 0.20, "name": "第三關"},
+        {"level": 4, "percentage": 0.40, "name": "第四關"}
+    ]
+    
+    for level in levels:
+        amount = int(principal * level["percentage"])
+        betting_plan.append({
+            "level": level["level"],
+            "name": level["name"],
+            "percentage": level["percentage"],
+            "amount": amount,
+            "suggestion": prediction if level["level"] == 1 else ("跟注" if level["level"] > 1 else prediction)
+        })
+    
+    return betting_plan
+
+def calculate_profit(user_id):
+    """計算用戶盈利"""
+    if user_id not in user_sessions:
+        return 0
+    
+    session = user_sessions[user_id]
+    if "bets" not in session or not session["bets"]:
+        return 0
+    
+    total_profit = 0
+    for bet in session["bets"]:
+        if bet["result"] == "win":
+            total_profit += bet["amount"]  # 1賠1
+        elif bet["result"] == "lose":
+            total_profit -= bet["amount"]
+    
+    return total_profit
+
 # =============================================================================
 # API Endpoint
 # =============================================================================
@@ -487,6 +531,183 @@ def predict():
         })
     except Exception as e:
         app.logger.error(f"預測時發生錯誤: {e}", exc_info=True)
+        return jsonify({"error": "內部伺服器錯誤"}), 500
+
+# =============================================================================
+# LINE BOT 專用端點
+# =============================================================================
+@app.route("/linebot/predict", methods=["POST"])
+def linebot_predict():
+    """LINE BOT 專用預測端點，返回簡化結果"""
+    if not models_loaded: 
+        load_all_models()
+        
+    if not models: 
+        return jsonify({"error": "模型檔案遺失或損毀。"}), 503
+        
+    try:
+        data = request.get_json()
+        received_roadmap = data.get("roadmap", [])
+        principal = data.get("principal", 5000)  # 預設本金為5000
+        user_id = data.get("user_id", "unknown")
+        
+        # 初始化用戶會話
+        if user_id not in user_sessions:
+            user_sessions[user_id] = {
+                "start_time": time.time(),
+                "principal": principal,
+                "bets": [],
+                "roadmap": received_roadmap
+            }
+        else:
+            # 更新用戶會話
+            user_sessions[user_id]["principal"] = principal
+            user_sessions[user_id]["roadmap"] = received_roadmap
+        
+        # 只保留B和P，過濾其他結果
+        filtered_roadmap = [r for r in received_roadmap if r in ["B", "P"]]
+        
+        # 檢查數據是否足夠
+        if len(filtered_roadmap) < N_FEATURES_WINDOW:
+            return jsonify({
+                "prediction": "數據不足",
+                "confidence": 0.5,
+                "banker_prob": 0.5,
+                "player_prob": 0.5,
+                "tie_prob": 0.0,
+                "betting_plan": []
+            })
+        
+        # 獲取XGBoost預測
+        xgb_suggestion, banker_prob, player_prob, xgb_prob = get_ml_prediction(
+            models['xgb'], models['scaler'], filtered_roadmap
+        )
+        
+        # 檢查長龍
+        dragon_type, streak_len = detect_dragon(filtered_roadmap)
+        if dragon_type:
+            dragon_vote = 'B' if dragon_type == 'B' else 'P'
+            BREAK_DRAGON_CONFIDENCE = 0.70
+            
+            # 只有當模型信心非常高時才允許斬龍
+            if xgb_suggestion != dragon_vote and xgb_prob > BREAK_DRAGON_CONFIDENCE:
+                pass  # 保持原預測
+            else:
+                xgb_suggestion = dragon_vote
+                xgb_prob = max(xgb_prob, 0.6)
+        
+        # 計算和局概率
+        tie_prob = 0.05
+        
+        # 正規化莊閒概率
+        total = banker_prob + player_prob
+        if total > 0:
+            banker_prob = banker_prob / total * (1 - tie_prob)
+            player_prob = player_prob / total * (1 - tie_prob)
+        
+        # 計算注碼策略
+        betting_plan = calculate_betting_plan(principal, xgb_suggestion, xgb_prob)
+        
+        # 為LINE BOT簡化響應格式
+        return jsonify({
+            "prediction": xgb_suggestion,
+            "confidence": round(xgb_prob, 2),
+            "banker_prob": round(banker_prob, 4),
+            "player_prob": round(player_prob, 4),
+            "tie_prob": round(tie_prob, 4),
+            "dragon": dragon_type if dragon_type else None,
+            "streak": streak_len if dragon_type else 0,
+            "betting_plan": betting_plan
+        })
+    except Exception as e:
+        app.logger.error(f"LINE BOT 預測時發生錯誤: {e}", exc_info=True)
+        return jsonify({"error": "內部伺服器錯誤"}), 500
+
+@app.route("/linebot/check_session", methods=["POST"])
+def linebot_check_session():
+    """檢查用戶會話狀態"""
+    try:
+        data = request.get_json()
+        user_id = data.get("user_id", "unknown")
+        
+        if user_id not in user_sessions:
+            return jsonify({
+                "active": False,
+                "message": "會話不存在"
+            })
+        
+        session = user_sessions[user_id]
+        elapsed_time = time.time() - session["start_time"]
+        remaining_time = max(0, 900 - elapsed_time)  # 15分鐘 = 900秒
+        
+        # 檢查是否超過15分鐘
+        if elapsed_time >= 900:
+            profit = calculate_profit(user_id)
+            
+            # 高科技風格的回覆
+            tech_emojis = "🤖🚀💎🎯✨🔥"
+            message = f"{tech_emojis} 會話時間已到期 {tech_emojis}\n\n"
+            message += f"⏰ 本次會話時間: 15分鐘\n"
+            message += f"💰 最終盈利: {profit}元\n\n"
+            
+            if profit > 0:
+                message += f"🎉 恭喜獲利！表現出色！{tech_emojis}"
+            elif profit == 0:
+                message += f"➖ 持平表現，下次再戰！{tech_emojis}"
+            else:
+                message += f"📉 虧損狀態，請調整策略！{tech_emojis}"
+            
+            # 刪除會話
+            del user_sessions[user_id]
+            
+            return jsonify({
+                "active": False,
+                "message": message,
+                "profit": profit
+            })
+        else:
+            return jsonify({
+                "active": True,
+                "remaining_time": remaining_time,
+                "message": f"會話還剩 {int(remaining_time // 60)}分{int(remaining_time % 60)}秒"
+            })
+            
+    except Exception as e:
+        app.logger.error(f"檢查會話時發生錯誤: {e}", exc_info=True)
+        return jsonify({"error": "內部伺服器錯誤"}), 500
+
+@app.route("/linebot/record_bet", methods=["POST"])
+def linebot_record_bet():
+    """記錄下注結果"""
+    try:
+        data = request.get_json()
+        user_id = data.get("user_id", "unknown")
+        amount = data.get("amount", 0)
+        prediction = data.get("prediction", "")
+        actual_result = data.get("actual_result", "")
+        
+        if user_id not in user_sessions:
+            return jsonify({"error": "會話不存在"}), 404
+        
+        # 確定輸贏
+        result = "win" if prediction == actual_result else "lose"
+        
+        # 記錄下注
+        if "bets" not in user_sessions[user_id]:
+            user_sessions[user_id]["bets"] = []
+        
+        user_sessions[user_id]["bets"].append({
+            "time": time.time(),
+            "amount": amount,
+            "prediction": prediction,
+            "actual_result": actual_result,
+            "result": result
+        })
+        
+        return jsonify({"message": "下注記錄成功"})
+        
+    except Exception as e:
+        app.logger.error(f"記錄下注時發生錯誤: {e}", exc_info=True)
         return jsonify({"error": "內部伺服器錯誤"}), 500
 
 if __name__ == "__main__":
