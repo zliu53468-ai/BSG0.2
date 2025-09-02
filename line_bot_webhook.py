@@ -542,7 +542,7 @@ def record_bet_result(event, user_id, result):
                 )
                 
     except Exception as e:
-        current_app.logger.error(f"記錄結果錯誤: {e}")
+        current_app.logger.error(f"記錄結果錯誤:极{e}")
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text="❌ 記錄結果時發生錯誤")
