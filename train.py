@@ -10,6 +10,7 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 from xgboost import XGBClassifier
 from hmmlearn import hmm
 import lightgbm as lgb
+import json
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -18,7 +19,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # =============================================================================
 MODEL_DIR = 'models'
 N_FEATURES_WINDOW = 20
-LABEL_MAP = {'B': 0, 'P': 1}
+LABEL_MAP = {'B': 0, 'P': 1}  # 只保留 B 和 P，因为我們不预测和局
 REVERSE_MAP = {0: 'B', 1: 'P'}  # 預測時使用英文代碼，與前端保持一致
 
 # =============================================================================
@@ -26,7 +27,7 @@ REVERSE_MAP = {0: 'B', 1: 'P'}  # 預測時使用英文代碼，與前端保持�
 # =============================================================================
 class BaccaratAnalyzer:
     def __init__(self, roadmap):
-        self.roadmap = [r for r in roadmap if r in ['B', 'P']]
+        self.roadmap = [r for r in roadmap if r in ['B', 'P']]  # 只保留 B 和 P
         self.big_road_grid = self._generate_big_road_grid()
 
     def _generate_big_road_grid(self):
@@ -110,6 +111,7 @@ def extract_features(full_roadmap):
         # 標籤是當前數據點 (i)
         label = full_roadmap[i]
         
+        # 只處理 B 和 P，跳過 T
         if label not in LABEL_MAP:
             continue
             
@@ -191,7 +193,7 @@ def train_models(X, y, roadmap, lightweight=False):
         os.makedirs(MODEL_DIR)
         print(f"✅ 已建立目錄: {MODEL_DIR}")
     
-    # 轉換為數值格式供HMM使用
+    # 轉換為數值格式供HMM使用 (只包含 B 和 P)
     roadmap_numeric = np.array([LABEL_MAP[r] for r in roadmap if r in LABEL_MAP]).reshape(-1, 1)
     
     # --- 1. 訓練 HMM 專家 ---
@@ -322,10 +324,60 @@ def train_models(X, y, roadmap, lightweight=False):
     print("\n🎉 所有專家模型已成功訓練並儲存！")
     return True
 
+def load_history_data():
+    """加载历史数据，包括预先喂养的数据和用户新增数据"""
+    # 预先喂养的数据
+    preloaded_data = [
+        "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", 
+        "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", 
+        "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", 
+        "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", 
+        "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P",
+        "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", 
+        "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", 
+        "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", 
+        "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", 
+        "P", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", 
+        "T", "T", "B", "P", "B", "B", "B", "T", "T", "B", "B", "P", "B", "T", "P", "B", "P", "B", "P", "P", 
+        "P", "B", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", 
+        "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", 
+        "B", "B", "P", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", 
+        "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", 
+        "P", "B", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", 
+        "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", "P", 
+        "B", "B", "B", "B", "B", "B", "P", "B", "T", "T", "P", "B", "B", "B", "P", "B", "B", "P", "B", "P", 
+        "B", "P", "B", "P", "P", "P", "P", "P", "P", "P", "B", "B", "B", "P", "T", "P", "B", "T", "B", "B", 
+        "B", "B", "T", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "B", "B", "P", "P", "B", "P", 
+        "P", "P", "P", "P", "B", "B", "B", "B", "B", "T", "B", "B", "P", "B", "P", "T", "P", "B", "P", "B", 
+        "B", "P", "B", "B", "B", "P", "P", "P", "B", "P", "P", "B", "P", "P", "B", "B", "P", "P", "B", "P", 
+        "B", "B", "B", "B", "B", "B", "B", "B", "P", "T", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", 
+        "P", "P", "T", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "P", "B", "T", "P", "B", "B", 
+        "P", "B", "P", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "T", "P", 
+        "P", "B", "T", "B", "P", "P", "P", "B", "B", "P", "B", "B", "B", "P", "B", "P", "P", "B", "B", "B", 
+        "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", 
+        "B", "P", "P", "T", "P", "P", "P", "B", "P", "P", "P", "B", "B", "B", "P", "P", "B", "P", "B", "B", 
+        "T", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "T", "B", "T", "P", "B", 
+        "P", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", 
+        "P", "B", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", 
+        "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
+    ]
+    
+    # 尝试加载用户新增数据
+    user_data = []
+    data_file = 'data/history_data.json'
+    if os.path.exists(data_file):
+        try:
+            with open(data_file, 'r') as f:
+                user_data = json.load(f)
+        except:
+            user_data = []
+    
+    # 合并预先喂养的数据和用户数据
+    return preloaded_data + user_data
+
 def train(lightweight=False):
     """主要訓練函數，用於命令行調用"""
-    # 從文件加載歷史數據
-    from app import load_history_data
+    # 加载历史数据
     history_data = load_history_data()
     
     print(f"✅ 使用 {len(history_data)} 筆歷史數據進行訓練")
