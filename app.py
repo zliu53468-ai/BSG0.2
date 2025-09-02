@@ -123,7 +123,7 @@ class BaccaratAnalyzer:
         return features
 
 # =============================================================================
-# 獨立預測函式
+# 獨立預測函式 - 更新以匹配train.py的特徵提取
 # =============================================================================
 def get_hmm_prediction(hmm_model, roadmap_numeric):
     try:
@@ -157,10 +157,13 @@ def get_ml_prediction(model, scaler, roadmap):
     if len(roadmap) < N_FEATURES_WINDOW:
         return "數據不足", 0.5, 0.5, 0.5
         
+    # 使用歷史數據創建分析器
+    analyzer = BaccaratAnalyzer(roadmap)
+    
     # 使用最後N個結果作為窗口
     window = roadmap[-N_FEATURES_WINDOW:]
     
-    # 計算基本特徵
+    # 計算基本特徵 - 與train.py保持一致
     b_count = window.count('B')
     p_count = window.count('P')
     total = b_count + p_count
@@ -184,10 +187,37 @@ def get_ml_prediction(model, scaler, roadmap):
     streak_type = LABEL_MAP.get(last_result, -1)
     prev_result = LABEL_MAP.get(window[-1], -1) if window else -1
     
-    basic_features = [b_ratio, p_ratio, streak, streak_type, prev_result]
+    # 添加更多特徵 - 與train.py保持一致
+    # 1. 最近5局的勝率
+    short_window = roadmap[-5:] if len(roadmap) >= 5 else roadmap
+    short_b_count = short_window.count('B')
+    short_p_count = short_window.count('P')
+    short_total = short_b_count + short_p_count
+    short_b_ratio = short_b_count / short_total if short_total > 0 else 0.5
+    short_p_ratio = short_p_count / short_total if short_total > 0 else 0.5
     
-    # 使用歷史數據創建分析器
-    analyzer = BaccaratAnalyzer(roadmap)
+    # 2. 歷史總勝率
+    total_b_count = roadmap.count('B')
+    total_p_count = roadmap.count('P')
+    total_ratio = total_b_count / (total_b_count + total_p_count) if (total_b_count + total_p_count) > 0 else 0.5
+    
+    # 3. 最近10局的變化趨勢
+    trend_window = roadmap[-10:] if len(roadmap) >= 10 else roadmap
+    trend_changes = 0
+    for j in range(1, len(trend_window)):
+        if trend_window[j] != trend_window[j-1]:
+            trend_changes += 1
+    trend_volatility = trend_changes / len(trend_window) if len(trend_window) > 0 else 0
+    
+    basic_features = [
+        b_ratio, p_ratio, 
+        short_b_ratio, short_p_ratio,
+        total_ratio,
+        trend_volatility,
+        streak, streak_type, prev_result
+    ]
+    
+    # 獲取衍生路特徵
     derived_features = analyzer.get_derived_road_features()
     
     # 合併所有特徵
