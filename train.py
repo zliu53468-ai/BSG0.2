@@ -21,13 +21,40 @@ N_FEATURES_WINDOW = 20
 LABEL_MAP = {'B': 0, 'P': 1}
 REVERSE_MAP = {0: 'B', 1: 'P'}  # 預測時使用英文代碼，與前端保持一致
 
-# 真實歷史數據 (简化版，减少数据量)
+# 真實歷史數據 (完整版)
 REAL_HISTORY_DATA = [
     "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", 
     "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", 
     "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", 
     "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", 
-    "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P"
+    "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P",
+    "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", 
+    "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", 
+    "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", 
+    "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", 
+    "P", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", 
+    "T", "T", "B", "P", "B", "B", "B", "T", "T", "B", "B", "P", "B", "T", "P", "B", "P", "B", "P", "P", 
+    "P", "B", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", 
+    "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", 
+    "B", "B", "P", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", 
+    "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", 
+    "P", "B", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", 
+    "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", "P", 
+    "B", "B", "B", "B", "B", "B", "P", "B", "T", "T", "P", "B", "B", "B", "P", "B", "B", "P", "B", "P", 
+    "B", "P", "B", "P", "P", "P", "P", "P", "P", "P", "B", "B", "B", "P", "T", "P", "B", "T", "B", "B", 
+    "B", "B", "T", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "B", "B", "P", "P", "B", "P", 
+    "P", "P", "P", "P", "B", "B", "B", "B", "B", "T", "B", "B", "P", "B", "P", "T", "P", "B", "P", "B", 
+    "B", "P", "B", "B", "B", "P", "P", "P", "B", "P", "P", "B", "P", "P", "B", "B", "P", "P", "B", "P", 
+    "B", "B", "B", "B", "B", "B", "B", "B", "P", "T", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", 
+    "P", "P", "T", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "P", "B", "T", "P", "B", "B", 
+    "P", "B", "P", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "T", "P", 
+    "P", "B", "T", "B", "P", "P", "P", "B", "B", "P", "B", "B", "B", "P", "B", "P", "P", "B", "B", "B", 
+    "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", 
+    "B", "P", "P", "T", "P", "P", "P", "B", "P", "P", "P", "B", "B", "B", "P", "P", "B", "P", "B", "B", 
+    "T", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "T", "B", "T", "P", "B", 
+    "P", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", 
+    "P", "B", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", 
+    "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
 ]
 
 # =============================================================================
@@ -149,7 +176,35 @@ def extract_features(full_roadmap):
         streak_type = LABEL_MAP.get(last_result, -1)
         prev_result = LABEL_MAP.get(window[-1], -1) if window else -1
         
-        basic_features = [b_ratio, p_ratio, streak, streak_type, prev_result]
+        # 添加更多特徵
+        # 1. 最近5局的勝率
+        short_window = historical_roadmap[-5:] if len(historical_roadmap) >= 5 else historical_roadmap
+        short_b_count = short_window.count('B')
+        short_p_count = short_window.count('P')
+        short_total = short_b_count + short_p_count
+        short_b_ratio = short_b_count / short_total if short_total > 0 else 0.5
+        short_p_ratio = short_p_count / short_total if short_total > 0 else 0.5
+        
+        # 2. 歷史總勝率
+        total_b_count = historical_roadmap.count('B')
+        total_p_count = historical_roadmap.count('P')
+        total_ratio = total_b_count / (total_b_count + total_p_count) if (total_b_count + total_p_count) > 0 else 0.5
+        
+        # 3. 最近10局的變化趨勢
+        trend_window = historical_roadmap[-10:] if len(historical_roadmap) >= 10 else historical_roadmap
+        trend_changes = 0
+        for j in range(1, len(trend_window)):
+            if trend_window[j] != trend_window[j-1]:
+                trend_changes += 1
+        trend_volatility = trend_changes / len(trend_window) if len(trend_window) > 0 else 0
+        
+        basic_features = [
+            b_ratio, p_ratio, 
+            short_b_ratio, short_p_ratio,
+            total_ratio,
+            trend_volatility,
+            streak, streak_type, prev_result
+        ]
         
         # 使用歷史數據創建分析器
         analyzer = BaccaratAnalyzer(historical_roadmap)
@@ -183,9 +238,9 @@ def train(lightweight=False):
     try:
         hmm_model = hmm.CategoricalHMM(
             n_components=2, 
-            n_iter=100 if lightweight else 200,  # 轻量模式下减少迭代次数
+            n_iter=100 if lightweight else 200,  # 恢复更多迭代次数
             random_state=42, 
-            tol=1e-3, 
+            tol=1e-3,  # 恢复更严格的容忍度
             init_params="ste"
         )
         hmm_model.fit(roadmap_numeric)
@@ -207,7 +262,7 @@ def train(lightweight=False):
     print(f"✅ 成功提取 {X.shape[0]} 個樣本，每個樣本有 {X.shape[1]} 個特徵")
     
     # 使用時間序列交叉驗證評估模型
-    tscv = TimeSeriesSplit(n_splits=3 if lightweight else 5)  # 轻量模式下减少折叠数
+    tscv = TimeSeriesSplit(n_splits=3 if lightweight else 5)
     
     # 創建標準化器並擬合全部數據
     scaler = StandardScaler()
@@ -218,16 +273,18 @@ def train(lightweight=False):
     # 使用全部數據訓練最終模型
     print("\n使用全部數據訓練最終模型...")
     
-    # XGBoost - 轻量模式下减少参数
-    n_estimators = 50 if lightweight else 100
-    max_depth = 3 if lightweight else 5
+    # XGBoost - 平衡性能和资源使用
+    n_estimators = 80 if lightweight else 150
+    max_depth = 4 if lightweight else 6
     
     xgb_model = XGBClassifier(
         objective='binary:logistic', 
         eval_metric='logloss', 
         n_estimators=n_estimators, 
-        learning_rate=0.05, 
+        learning_rate=0.05,  # 适中的学习率
         max_depth=max_depth,
+        subsample=0.8,  # 添加子采样防止过拟合
+        colsample_bytree=0.8,  # 添加列采样防止过拟合
         use_label_encoder=False, 
         random_state=42
     )
@@ -235,18 +292,66 @@ def train(lightweight=False):
     joblib.dump(xgb_model, os.path.join(MODEL_DIR, 'xgb_model.pkl'))
     print("✅ XGBoost 專家 (xgb_model.pkl) 已儲存。")
     
-    # LightGBM - 轻量模式下减少参数
+    # LightGBM - 平衡性能和资源使用
     lgbm_model = lgb.LGBMClassifier(
         objective='binary', 
         metric='binary_logloss', 
         n_estimators=n_estimators, 
-        learning_rate=0.05, 
+        learning_rate=0.05,  # 适中的学习率
         max_depth=max_depth,
-        random_state=42
+        subsample=0.8,  # 添加子采样防止过拟合
+        colsample_bytree=0.8,  # 添加列采样防止过拟合
+        random_state=42,
+        verbose=-1  # 减少输出
     )
     lgbm_model.fit(X_scaled, y)
     joblib.dump(lgbm_model, os.path.join(MODEL_DIR, 'lgbm_model.pkl'))
     print("✅ LightGBM 專家 (lgbm_model.pkl) 已儲存。")
+    
+    # 交叉驗證評估
+    print("\n進行時間序列交叉驗證評估...")
+    xgb_scores, lgbm_scores = [], []
+    
+    for train_index, test_index in tscv.split(X_scaled):
+        X_train, X_test = X_scaled[train_index], X_scaled[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+        
+        # XGBoost
+        xgb_cv = XGBClassifier(
+            objective='binary:logistic', 
+            eval_metric='logloss', 
+            n_estimators=n_estimators, 
+            learning_rate=0.05,
+            max_depth=max_depth,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            use_label_encoder=False, 
+            random_state=42
+        )
+        xgb_cv.fit(X_train, y_train)
+        xgb_score = xgb_cv.score(X_test, y_test)
+        xgb_scores.append(xgb_score)
+        
+        # LightGBM
+        lgbm_cv = lgb.LGBMClassifier(
+            objective='binary', 
+            metric='binary_logloss', 
+            n_estimators=n_estimators, 
+            learning_rate=0.05,
+            max_depth=max_depth,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            verbose=-1
+        )
+        lgbm_cv.fit(X_train, y_train)
+        lgbm_score = lgbm_cv.score(X_test, y_test)
+        lgbm_scores.append(lgbm_score)
+    
+    # 輸出交叉驗證結果
+    print(f"\n🎯 時間序列交叉驗證準確率:")
+    print(f"   XGBoost: {np.mean(xgb_scores):.4f} (±{np.std(xgb_scores):.4f})")
+    print(f"   LightGBM: {np.mean(lgbm_scores):.4f} (±{np.std(lgbm_scores):.4f})")
     
     # 輸出最終模型在訓練集上的表現
     xgb_train_score = xgb_model.score(X_scaled, y)
@@ -262,4 +367,5 @@ if __name__ == '__main__':
     parser.add_argument('--lightweight', action='store_true', help='使用轻量级模式训练')
     args = parser.parse_args()
     
-    train(lightweight=args.lightweight)
+    # 在Render上默认使用轻量级模式
+    train(lightweight=True if os.environ.get('RENDER') else args.lightweight)
