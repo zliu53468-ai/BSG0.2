@@ -162,7 +162,8 @@ def extract_features(full_roadmap):
         for j in range(1, len(trend_window)):
             if trend_window[j] != trend_window[j-1]:
                 trend_changes += 1
-        trend_volatility = trend_changes / len(ttrend_window) if len(trend_window) > 0 else 0
+        # 修正這裡的變數名錯誤：將 ttrend_window 改為 trend_window
+        trend_volatility = trend_changes / len(trend_window) if len(trend_window) > 0 else 0
         
         basic_features = [
             b_ratio, p_ratio, 
