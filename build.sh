@@ -4,12 +4,12 @@ set -o errexit
 
 pip install -r requirements.txt
 
-# 如果 models 目录不存在或为空，则训练模型
-if [ ! -d "models" ] || [ -z "$(ls -A models)" ]; then
-    echo "Training models..."
-    python train.py
+# 如果有預訓練的模型文件，跳過訓練步驟
+if [ -f "models/xgb_model.pkl" ] && [ -f "models/lgbm_model.pkl" ] && [ -f "models/hmm_model.pkl" ]; then
+    echo "使用預訓練模型，跳過訓練步驟..."
 else
-    echo "Using pre-trained models..."
+    echo "訓練模型中..."
+    python train.py
 fi
 
-echo "Build completed successfully!"
+echo "構建成功完成！"
