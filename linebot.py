@@ -3,9 +3,10 @@ import os
 import json
 import time
 import random
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import MessageEvent, TextMessage, TextSendMessage, QuickReply, QuickReplyButton, MessageAction
+from linebot.exceptions import InvalidSignatureError
 
 # 初始化 LINE BOT
 line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN', ''))
@@ -24,12 +25,17 @@ def webhook():
     
     # 獲取請求體內容
     body = request.get_data(as_text=True)
+    current_app.logger.info("Request body: " + body)
     
     try:
         # 處理 webhook 體
         handler.handle(body, signature)
+    except InvalidSignatureError:
+        current_app.logger.error("Invalid signature. Please check your channel access token/channel secret.")
+        return jsonify({"error": "Invalid signature"}), 400
     except Exception as e:
-        print(f"Error: {e}")
+        current_app.logger.error(f"Error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
     
     return 'OK'
 
@@ -38,6 +44,7 @@ def handle_message(event):
     # 獲取用戶發送的訊息
     user_id = event.source.user_id
     user_message = event.message.text
+    current_app.logger.info(f"Received message from {user_id}: {user_message}")
     
     # 檢查每日使用時間
     usage_check = check_user_usage(user_id)
@@ -199,79 +206,80 @@ def make_prediction(event, user_id):
     try:
         import requests
         
-        response = requests.post(
-            f"{request.host_url}linebot/predict",
-            json={
-                "roadmap": user_states[user_id]["roadmap"],
-                "principal": user_states[user_id]["principal"],
-                "user_id": user_id
-            },
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            prediction = data.get('prediction', '未知')
-            confidence = data.get('confidence', 0) * 100
+        # 使用內部請求而不是外部URL
+        with current_app.test_client() as client:
+            response = client.post(
+                '/linebot/predict',
+                json={
+                    "roadmap": user_states[user_id]["roadmap"],
+                    "principal": user_states[user_id]["principal"],
+                    "user_id": user_id
+                }
+            )
             
-            # 構建BGS AI風格的回覆
-            bgs_emojis = "🔮📊🎯⚡"
-            reply_text = f"{bgs_emojis} BGS AI分析完成 {bgs_emojis}\n\n"
-            
-            if prediction == "觀望":
-                reply_text += f"📊 當前建議: 觀望 (信心度: {confidence:.1f}%)\n\n"
-                reply_text += "建議暫時不要下注，等待更明確的信號。"
-            else:
-                # 添加下注建議
-                chinese_prediction = "庄" if prediction == "B" else "闲"
-                reply_text += f"🎯 BGS建議: {chinese_prediction} (信心度: {confidence:.1f}%)\n\n"
+            if response.status_code == 200:
+                data = json.loads(response.get_data())
+                prediction = data.get('prediction', '未知')
+                confidence = data.get('confidence', 0) * 100
                 
-                # 添加長龍信息
-                dragon_info = ""
-                if data.get('dragon'):
-                    dragon_type = "庄" if data['dragon'] == "B" else "闲"
-                    dragon_info = f"📈 檢測到趨勢: {dragon_type} (連續 {data['streak']} 次)\n\n"
+                # 構建BGS AI風格的回覆
+                bgs_emojis = "🔮📊🎯⚡"
+                reply_text = f"{bgs_emojis} BGS AI分析完成 {bgs_emojis}\n\n"
                 
-                reply_text += dragon_info
+                if prediction == "觀望":
+                    reply_text += f"📊 當前建議: 觀望 (信心度: {confidence:.1f}%)\n\n"
+                    reply_text += "建議暫時不要下注，等待更明確的信號。"
+                else:
+                    # 添加下注建議
+                    chinese_prediction = "庄" if prediction == "B" else "闲"
+                    reply_text += f"🎯 BGS建議: {chinese_prediction} (信心度: {confidence:.1f}%)\n\n"
+                    
+                    # 添加長龍信息
+                    dragon_info = ""
+                    if data.get('dragon'):
+                        dragon_type = "庄" if data['dragon'] == "B" else "闲"
+                        dragon_info = f"📈 檢測到趨勢: {dragon_type} (連續 {data['streak']} 次)\n\n"
+                    
+                    reply_text += dragon_info
+                    
+                    # 添加注碼策略
+                    reply_text += "💰 BGS資金分配建議:\n"
+                    betting_plan = data.get('betting_plan', [])
+                    for plan in betting_plan:
+                        chinese_suggestion = "庄" if plan['suggestion'] == "B" else "闲" if plan['suggestion'] == "P" else plan['suggestion']
+                        reply_text += f"{plan['name']}: {plan['amount']}元 ({plan['percentage']*100:.0f}%) → {chinese_suggestion}\n"
+                    
+                    reply_text += "\n⚡ BGS策略: 採用漸進式注碼，如第一關未過則進入下一關"
+                    
+                    # 添加每日剩餘時間
+                    remaining = data.get('daily_remaining', 0)
+                    reply_text += f"\n⏰ 今日剩餘時間: {int(remaining // 60)}分{int(remaining % 60)}秒"
                 
-                # 添加注碼策略
-                reply_text += "💰 BGS資金分配建議:\n"
-                betting_plan = data.get('betting_plan', [])
-                for plan in betting_plan:
-                    chinese_suggestion = "庄" if plan['suggestion'] == "B" else "闲" if plan['suggestion'] == "P" else plan['suggestion']
-                    reply_text += f"{plan['name']}: {plan['amount']}元 ({plan['percentage']*100:.0f}%) → {chinese_suggestion}\n"
-                
-                reply_text += "\n⚡ BGS策略: 採用漸進式注碼，如第一關未過則進入下一關"
-                
-                # 添加每日剩餘時間
-                remaining = data.get('daily_remaining', 0)
-                reply_text += f"\n⏰ 今日剩餘時間: {int(remaining // 60)}分{int(remaining % 60)}秒"
-            
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(
-                    text=reply_text,
-                    quick_reply=QuickReply(items=[
-                        QuickReplyButton(action=MessageAction(label="記錄結果", text="記錄結果")),
-                        QuickReplyButton(action=MessageAction(label="重新分析", text="開始")),
-                        QuickReplyButton(action=MessageAction(label="查看狀態", text="狀態"))
-                    ])
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(
+                        text=reply_text,
+                        quick_reply=QuickReply(items=[
+                            QuickReplyButton(action=MessageAction(label="記錄結果", text="記錄結果")),
+                            QuickReplyButton(action=MessageAction(label="重新分析", text="開始")),
+                            QuickReplyButton(action=MessageAction(label="查看狀態", text="狀態"))
+                        ])
+                    )
                 )
-            )
-        elif response.status_code == 429:
-            # 每日使用時間已達上限
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="❌ 今日使用時間已達15分鐘上限，請明天再使用。")
-            )
-        else:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="❌ BGS分析服務暫時不可用，請稍後再試")
-            )
-            
+            elif response.status_code == 429:
+                # 每日使用時間已達上限
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="❌ 今日使用時間已達15分鐘上限，請明天再試。")
+                )
+            else:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="❌ BGS分析服務暫時不可用，請稍後再試")
+                )
+                
     except Exception as e:
-        print(f"分析錯誤: {e}")
+        current_app.logger.error(f"分析錯誤: {e}")
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text="❌ BGS分析時發生錯誤，請稍後再試")
@@ -282,28 +290,29 @@ def learn_roadmap(event, user_id, user_message):
     try:
         import requests
         
-        response = requests.post(
-            f"{request.host_url}linebot/learn",
-            json={"roadmap": user_message},
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=f"✅ {data['message']}")
+        # 使用內部請求而不是外部URL
+        with current_app.test_client() as client:
+            response = client.post(
+                '/linebot/learn',
+                json={"roadmap": user_message}
             )
-        else:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="❌ 學習數據時發生錯誤")
-            )
+            
+            if response.status_code == 200:
+                data = json.loads(response.get_data())
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=f"✅ {data['message']}")
+                )
+            else:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="❌ 學習數據時發生錯誤")
+                )
         
         user_states[user_id]["step"] = "waiting_roadmap"
         
     except Exception as e:
-        print(f"學習數據錯誤: {e}")
+        current_app.logger.error(f"學習數據錯誤: {e}")
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text="❌ 學習數據時發生錯誤")
@@ -409,7 +418,7 @@ def show_status(event, user_id):
         )
             
     except Exception as e:
-        print(f"獲取狀態錯誤: {e}")
+        current_app.logger.error(f"獲取狀態錯誤: {e}")
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text="❌ 獲取BGS狀態時發生錯誤")
@@ -418,17 +427,17 @@ def show_status(event, user_id):
 def check_user_usage(user_id):
     """檢查用戶使用時間"""
     try:
-        import requests
-        response = requests.post(
-            f"{request.host_url}linebot/check_usage",
-            json={"user_id": user_id},
-            timeout=5
-        )
-        
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return {"can_use": True}
+        # 使用內部請求而不是外部URL
+        with current_app.test_client() as client:
+            response = client.post(
+                '/linebot/check_usage',
+                json={"user_id": user_id}
+            )
+            
+            if response.status_code == 200:
+                return json.loads(response.get_data())
+            else:
+                return {"can_use": True}
     except:
         return {"can_use": True}
 
@@ -438,103 +447,102 @@ def record_bet_result(event, user_id, result):
         import requests
         
         # 獲取最後一次預測
-        prediction_response = requests.post(
-            f"{request.host_url}linebot/predict",
-            json={
-                "roadmap": user_states[user_id]["roadmap"],
-                "principal": user_states[user_id]["principal"],
-                "user_id": user_id
-            },
-            timeout=10
-        )
-        
-        if prediction_response.status_code != 200:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="❌ 無法獲取預測信息")
+        with current_app.test_client() as client:
+            prediction_response = client.post(
+                '/linebot/predict',
+                json={
+                    "roadmap": user_states[user_id]["roadmap"],
+                    "principal": user_states[user_id]["principal"],
+                    "user_id": user_id
+                }
             )
-            return
-        
-        prediction_data = prediction_response.json()
-        prediction = prediction_data.get('prediction', '')
-        
-        if prediction == "觀望":
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="❌ 當前預測為觀望，無需記錄結果")
-            )
-            return
-        
-        # 確定下注金額（使用第一關金額）
-        betting_plan = prediction_data.get('betting_plan', [])
-        if not betting_plan:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="❌ 無法獲取下注計劃")
-            )
-            return
-        
-        amount = betting_plan[0]["amount"]  # 第一關金額
-        
-        # 確定實際結果
-        actual_result = ""
-        if result == "庄贏":
-            actual_result = "B"
-        elif result == "閒贏":
-            actual_result = "P"
-        else:
-            actual_result = "T"
-        
-        # 記錄下注
-        record_response = requests.post(
-            f"{request.host_url}linebot/record_bet",
-            json={
-                "user_id": user_id,
-                "amount": amount,
-                "prediction": prediction,
-                "actual_result": actual_result
-            },
-            timeout=5
-        )
-        
-        if record_response.status_code == 200:
-            # 確定輸贏
-            win = (prediction == actual_result)
             
-            # 構建回覆
-            bgs_emojis = "📊🔢✅❌"
-            reply_text = f"{bgs_emojis} 下注結果記錄完成 {bgs_emojis}\n\n"
-            reply_text += f"預測: {'庄' if prediction == 'B' else '闲'}\n"
-            reply_text += f"結果: {result}\n"
-            reply_text += f"金額: {amount}元\n"
-            reply_text += f"狀態: {'✅ 贏' if win else '❌ 輸'}\n\n"
-            
-            # 檢查使用時間
-            usage_check = check_user_usage(user_id)
-            if usage_check.get("can_use", False):
-                remaining = usage_check.get("remaining", 0)
-                reply_text += f"⏰ 今日剩餘時間: {int(remaining // 60)}分{int(remaining % 60)}秒"
-            else:
-                reply_text += f"⏰ {usage_check.get('message', '今日使用時間已達上限')}"
-            
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(
-                    text=reply_text,
-                    quick_reply=QuickReply(items=[
-                        QuickReplyButton(action=MessageAction(label="繼續預測", text="開始")),
-                        QuickReplyButton(action=MessageAction(label="查看狀態", text="狀態"))
-                    ])
+            if prediction_response.status_code != 200:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="❌ 無法獲取預測信息")
                 )
-            )
-        else:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="❌ 記錄結果時發生錯誤")
+                return
+            
+            prediction_data = json.loads(prediction_response.get_data())
+            prediction = prediction_data.get('prediction', '')
+            
+            if prediction == "觀望":
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="❌ 當前預測為觀望，無需記錄結果")
+                )
+                return
+            
+            # 確定下注金額（使用第一關金額）
+            betting_plan = prediction_data.get('betting_plan', [])
+            if not betting_plan:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="❌ 無法獲取下注計劃")
+                )
+                return
+            
+            amount = betting_plan[0]["amount"]  # 第一關金額
+            
+            # 確定實際結果
+            actual_result = ""
+            if result == "庄贏":
+                actual_result = "B"
+            elif result == "閒贏":
+                actual_result = "P"
+            else:
+                actual_result = "T"
+            
+            # 記錄下注
+            record_response = client.post(
+                '/linebot/record_bet',
+                json={
+                    "user_id": user_id,
+                    "amount": amount,
+                    "prediction": prediction,
+                    "actual_result": actual_result
+                }
             )
             
+            if record_response.status_code == 200:
+                # 確定輸贏
+                win = (prediction == actual_result)
+                
+                # 構建回覆
+                bgs_emojis = "📊🔢✅❌"
+                reply_text = f"{bgs_emojis} 下注結果記錄完成 {bgs_emojis}\n\n"
+                reply_text += f"預測: {'庄' if prediction == 'B' else '闲'}\n"
+                reply_text += f"結果: {result}\n"
+                reply_text += f"金額: {amount}元\n"
+                reply_text += f"狀態: {'✅ 贏' if win else '❌ 輸'}\n\n"
+                
+                # 檢查使用時間
+                usage_check = check_user_usage(user_id)
+                if usage_check.get("can_use", False):
+                    remaining = usage_check.get("remaining", 0)
+                    reply_text += f"⏰ 今日剩餘時間: {int(remaining // 60)}分{int(remaining % 60)}秒"
+                else:
+                    reply_text += f"⏰ {usage_check.get('message', '今日使用時間已達上限')}"
+                
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(
+                        text=reply_text,
+                        quick_reply=QuickReply(items=[
+                            QuickReplyButton(action=MessageAction(label="繼續預測", text="開始")),
+                            QuickReplyButton(action=MessageAction(label="查看狀態", text="狀態"))
+                        ])
+                    )
+                )
+            else:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text="❌ 記錄結果時發生錯誤")
+                )
+                
     except Exception as e:
-        print(f"記錄結果錯誤: {e}")
+        current_app.logger.error(f"記錄結果錯誤: {e}")
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text="❌ 記錄結果時發生錯誤")
