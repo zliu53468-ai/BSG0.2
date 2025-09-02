@@ -2,10 +2,14 @@
 # exit on error
 set -o errexit
 
-# 1. 安裝所有 Python 套件
 pip install -r requirements.txt
 
-# 2. 執行訓練腳本來建立模型檔案
-python train.py
+# 如果 models 目录不存在或为空，则训练模型
+if [ ! -d "models" ] || [ -z "$(ls -A models)" ]; then
+    echo "Training models..."
+    python train.py
+else
+    echo "Using pre-trained models..."
+fi
 
-echo "模型訓練完成，建置成功！"
+echo "Build completed successfully!"
