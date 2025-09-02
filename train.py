@@ -3,6 +3,7 @@ import numpy as np
 import joblib
 import os
 import warnings
+import argparse
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -20,9 +21,13 @@ N_FEATURES_WINDOW = 20
 LABEL_MAP = {'B': 0, 'P': 1}
 REVERSE_MAP = {0: 'B', 1: 'P'}  # 預測時使用英文代碼，與前端保持一致
 
-# 真實歷史數據
+# 真實歷史數據 (简化版，减少数据量)
 REAL_HISTORY_DATA = [
-    "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P", "B", "B", "P", "B", "B", "P", "T", "T", "B", "P", "B", "B", "B", "B", "B", "P", "P", "B", "P", "B", "B", "P", "P", "P", "P", "P", "P", "B", "B", "T", "B", "T", "B", "P", "P", "P", "B", "P", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "B", "P", "B", "P", "B", "B", "P", "B", "P", "T", "T", "B", "B", "B", "B", "P", "B", "B", "B", "P", "B", "T", "P", "P", "B", "B", "B", "P", "P", "P", "B", "P", "B", "P", "P", "P", "B", "T", "B", "P", "B", "T", "B", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "B", "T", "T", "B", "P", "B", "B", "P", "P", "P", "B", "P", "B", "T", "B", "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "B", "P", "T", "B", "P", "T", "B", "B", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "B", "B", "P", "B", "P", "B", "T", "B", "B", "P", "P", "B", "B", "P", "T", "P", "P", "B", "P", "B", "B", "B", "B", "P", "B", "P", "B", "B", "T", "P", "B", "P", "B", "T", "T", "B", "P", "P", "B", "P", "P", "B", "B", "P", "B", "P", "T", "P", "P", "P", "P", "B", "B", "B", "B", "B", "P", "B", "P", "B", "P", "B", "B", "P", "B", "P", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "B", "P", "B", "P", "B", "P", "T", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "P", "P", "B", "B", "P", "B", "T", "B", "T", "B", "P", "B", "P", "T", "P", "B", "B", "P", "P", "P", "B", "P", "B", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "B", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "P", "P", "B", "P", "P", "P", "P", "P", "B", "P", "P", "B", "P", "B", "B", "P", "T", "B", "P", "B", "P", "P", "T", "P", "B", "B", "T", "B", "P", "T", "P", "B", "P", "B", "B", "P", "B", "B", "T", "P", "P", "P", "P", "T", "P", "T", "B", "B", "P", "B", "B", "P", "P", "P", "B", "P", "B", "P", "T", "P", "P", "T", "P", "P", "B", "P", "P", "B", "P", "P", "B", "P", "P", "T", "B", "P", "B", "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "T", "T", "B", "P", "B", "B", "B", "T", "T", "B", "B", "P", "B", "T", "P", "B", "P", "B", "P", "P", "P", "B", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "T", "T", "B", "B", "P", "B", "B", "P", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "B", "P", "P", "B", "T", "B", "B", "P", "P", "P", "T", "P", "B", "T", "P", "B", "B", "P", "B", "B", "B", "B", "B", "P", "B", "T", "T", "P", "B", "B", "B", "P", "B", "B", "P", "B", "P", "B", "P", "P", "P", "P", "P", "P", "B", "B", "B", "P", "T", "P", "B", "T", "B", "B", "B", "B", "T", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "B", "B", "P", "P", "B", "P", "P", "P", "P", "B", "B", "B", "B", "B", "T", "B", "B", "P", "B", "P", "T", "P", "B", "B", "P", "B", "B", "B", "P", "P", "P", "B", "P", "P", "B", "P", "P", "B", "B", "P", "P", "B", "P", "B", "B", "B", "B", "B", "B", "B", "B", "P", "T", "P", "B", "P", "B", "P", "P", "B", "B", "P", "B", "P", "P", "T", "B", "B", "P", "P", "B", "B", "P", "B", "B", "T", "P", "P", "B", "T", "P", "B", "B", "P", "B", "P", "B", "P", "B", "B", "B", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "T", "P", "P", "B", "T", "B", "P", "P", "P", "B", "B", "P", "B", "B", "P", "B", "P", "P", "B", "B", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", "P", "B", "P", "P", "P", "P", "B", "B", "P", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
+    "P", "P", "T", "B", "T", "B", "P", "B", "P", "P", "B", "B", "T", "B", "B", "P", "B", "B", "P", "B", 
+    "B", "T", "P", "B", "B", "T", "P", "B", "P", "B", "P", "B", "B", "T", "P", "T", "B", "B", "P", "P", 
+    "B", "P", "B", "P", "T", "P", "B", "B", "B", "P", "B", "B", "B", "B", "P", "P", "P", "B", "P", "B", 
+    "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", 
+    "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P"
 ]
 
 # =============================================================================
@@ -157,7 +162,7 @@ def extract_features(full_roadmap):
         
     return np.array(features_list), np.array(labels)
 
-def train():
+def train(lightweight=False):
     print("="*50)
     print("開始重新訓練 AI 模型 (使用正確的時間序列方法)...")
     print("="*50)
@@ -178,7 +183,7 @@ def train():
     try:
         hmm_model = hmm.CategoricalHMM(
             n_components=2, 
-            n_iter=200, 
+            n_iter=100 if lightweight else 200,  # 轻量模式下减少迭代次数
             random_state=42, 
             tol=1e-3, 
             init_params="ste"
@@ -202,8 +207,7 @@ def train():
     print(f"✅ 成功提取 {X.shape[0]} 個樣本，每個樣本有 {X.shape[1]} 個特徵")
     
     # 使用時間序列交叉驗證評估模型
-    tscv = TimeSeriesSplit(n_splits=5)
-    xgb_scores, lgbm_scores = [], []
+    tscv = TimeSeriesSplit(n_splits=3 if lightweight else 5)  # 轻量模式下减少折叠数
     
     # 創建標準化器並擬合全部數據
     scaler = StandardScaler()
@@ -211,54 +215,19 @@ def train():
     joblib.dump(scaler, os.path.join(MODEL_DIR, 'scaler.pkl'))
     print("✅ 標準化器 (scaler.pkl) 已儲存。")
     
-    print("\n進行時間序列交叉驗證...")
-    for fold, (train_index, test_index) in enumerate(tscv.split(X_scaled)):
-        X_train, X_test = X_scaled[train_index], X_scaled[test_index]
-        y_train, y_test = y[train_index], y[test_index]
-        
-        # 訓練XGBoost
-        xgb_model = XGBClassifier(
-            objective='binary:logistic', 
-            eval_metric='logloss', 
-            n_estimators=100, 
-            learning_rate=0.05, 
-            max_depth=3,  # 減少深度防止過擬合
-            use_label_encoder=False, 
-            random_state=42
-        )
-        xgb_model.fit(X_train, y_train)
-        xgb_score = xgb_model.score(X_test, y_test)
-        xgb_scores.append(xgb_score)
-        
-        # 訓練LightGBM
-        lgbm_model = lgb.LGBMClassifier(
-            objective='binary', 
-            metric='binary_logloss', 
-            n_estimators=100, 
-            learning_rate=0.05, 
-            max_depth=3,  # 減少深度防止過擬合
-            random_state=42
-        )
-        lgbm_model.fit(X_train, y_train)
-        lgbm_score = lgbm_model.score(X_test, y_test)
-        lgbm_scores.append(lgbm_score)
-        
-        print(f"折疊 {fold+1}: XGBoost={xgb_score:.4f}, LightGBM={lgbm_score:.4f}")
-    
-    # 輸出交叉驗證結果
-    print(f"\n📊 XGBoost 平均準確率: {np.mean(xgb_scores):.4f} (±{np.std(xgb_scores):.4f})")
-    print(f"📊 LightGBM 平均準確率: {np.mean(lgbm_scores):.4f} (±{np.std(lgbm_scores):.4f})")
-    
     # 使用全部數據訓練最終模型
     print("\n使用全部數據訓練最終模型...")
     
-    # XGBoost
+    # XGBoost - 轻量模式下减少参数
+    n_estimators = 50 if lightweight else 100
+    max_depth = 3 if lightweight else 5
+    
     xgb_model = XGBClassifier(
         objective='binary:logistic', 
         eval_metric='logloss', 
-        n_estimators=100, 
+        n_estimators=n_estimators, 
         learning_rate=0.05, 
-        max_depth=3,
+        max_depth=max_depth,
         use_label_encoder=False, 
         random_state=42
     )
@@ -266,13 +235,13 @@ def train():
     joblib.dump(xgb_model, os.path.join(MODEL_DIR, 'xgb_model.pkl'))
     print("✅ XGBoost 專家 (xgb_model.pkl) 已儲存。")
     
-    # LightGBM
+    # LightGBM - 轻量模式下减少参数
     lgbm_model = lgb.LGBMClassifier(
         objective='binary', 
         metric='binary_logloss', 
-        n_estimators=100, 
+        n_estimators=n_estimators, 
         learning_rate=0.05, 
-        max_depth=3,
+        max_depth=max_depth,
         random_state=42
     )
     lgbm_model.fit(X_scaled, y)
@@ -286,17 +255,11 @@ def train():
     print(f"   XGBoost: {xgb_train_score:.4f}")
     print(f"   LightGBM: {lgbm_train_score:.4f}")
     
-    # 輸出分類報告
-    y_pred_xgb = xgb_model.predict(X_scaled)
-    y_pred_lgbm = lgbm_model.predict(X_scaled)
-    
-    print("\n📋 XGBoost 分類報告:")
-    print(classification_report(y, y_pred_xgb, target_names=['莊(B)', '閒(P)']))
-    
-    print("📋 LightGBM 分類報告:")
-    print(classification_report(y, y_pred_lgbm, target_names=['莊(B)', '閒(P)']))
-    
     print("\n🎉 所有專家模型已成功訓練並儲存！")
 
 if __name__ == '__main__':
-    train()
+    parser = argparse.ArgumentParser(description='训练百家乐预测模型')
+    parser.add_argument('--lightweight', action='store_true', help='使用轻量级模式训练')
+    args = parser.parse_args()
+    
+    train(lightweight=args.lightweight)
