@@ -4,6 +4,9 @@ set -o errexit
 echo "开始安装依赖..."
 pip install -r requirements.txt
 
+# 创建必要的目录
+mkdir -p models data logs
+
 # 检查模型是否存在，如果不存在则使用简化训练
 if [ ! -f "models/xgb_model.pkl" ] || [ ! -f "models/lgbm_model.pkl" ] || [ ! -f "models/hmm_model.pkl" ]; then
     echo "训练简化模型中..."
