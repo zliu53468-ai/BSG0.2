@@ -657,6 +657,10 @@ def linebot_learn():
         app.logger.error(f"學習數據時發生錯誤: {e}", exc_info=True)
         return jsonify({"error": "內部伺服器錯誤"}), 500
 
+# 導入並註冊 LINE BOT 藍圖
+from linebot import linebot_bp
+app.register_blueprint(linebot_bp)
+
 if __name__ == "__main__":
     load_all_models()
     port = int(os.environ.get("PORT", 10000))
