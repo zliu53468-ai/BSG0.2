@@ -55,7 +55,7 @@ PRELOADED_DATA = [
     "P", "B", "P", "B", "T", "P", "B", "B", "P", "B", "P", "T", "B", "B", "P", "B", "B", "P", "T", "T", 
     "B", "P", "B", "B", "P", "P", "B", "P", "B", "P", "T", "P", "B", "P", "B", "P", "T", "T", "B", "P",
     "P", "P", "B", "B", "B", "B", "T", "T", "T", "B", "B", "B", "B", "B", "B", "P", "P", "P", "T", "P", 
-    "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", "P", "B", 
+    "T", "B", "P", "P", "T", "P", "B", "P", "P", "B", "P", "P", "P", "P", "B", "P", "B", "P", 'P', "B", 
     "B", "P", "B", "B", "B", "B", "P", "P", "P", "P", "P", "T", "P", "B", "P", "P", "B", "T", "B", "B", 
     "B", "B", "P", "B", "B", "B", "B", "B", "B", "P", "B", "P", "P", "B", "P", "P", "B", "P", "B", "B", 
     "P", "B", "P", "B", "P", "P", "T", "P", "B", "P", "B", "B", "P", "P", "T", "B", "B", "P", "P", "B", 
@@ -79,7 +79,7 @@ PRELOADED_DATA = [
     "B", "P", "P", "T", "P", "P", "P", "B", "P", "P", "P", "B", "B", "B", "P", "P", "B", "P", "B", "B", 
     "T", "P", "B", "P", "P", "T", "P", "P", "P", "B", "B", "P", "P", "T", "P", "T", "B", "T", "P", "B", 
     "P", "P", "B", "B", "P", "P", "P", "B", "B", "P", "P", "B", "P", "T", "P", "P", "P", "B", "B", "P", 
-    "P", "B", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "B", "T", "P", "T", "P", 
+    "P", "B", "P", "B", "P", "B", "B", "P", "T", "B", "P", "T", "T", "P", "T", "极", "T", "P", "T", "P", 
     "T", "P", "P", "B", "B", "P", "P", "P", "P", "P"
 ]
 
@@ -523,7 +523,7 @@ def linebot_predict():
         # 檢查長龍
         dragon_type, streak_len = detect_dragon(roadmap)
         if dragon_type:
-            dragon_vote = 'B' if dragon_type == 'B' else 'P'
+            dragon_vote = 'B' if dragon_type == '极' else 'P'
             BREAK_DRAGON_CONFIDENCE = 0.70
             
             if xgb_suggestion != dragon_vote and xgb_prob > BREAK_DRAGON_CONFIDENCE:
@@ -658,7 +658,7 @@ def linebot_learn():
         return jsonify({"error": "內部伺服器錯誤"}), 500
 
 # 導入並註冊 LINE BOT 藍圖
-from linebot import linebot_bp
+from line_bot_webhook import linebot_bp
 app.register_blueprint(linebot_bp)
 
 if __name__ == "__main__":
