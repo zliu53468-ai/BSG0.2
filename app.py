@@ -153,9 +153,9 @@ class RoadmapAnalyzer:
 # =============================================================================
 # API 路由
 # =============================================================================
-@app.route('/predict', methods=['POST'])
-def predict_handler():
-    start = time.time()
+@app.route('/')  # ← 需在現有路由定義前插入
+def health_check():
+    return jsonify({"status": "服務運行中"})
     try:
         if not load_models():
             return jsonify({"error": "AI 引擎初始化失敗"}), 500
@@ -211,3 +211,4 @@ def health_check():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, threaded=True)
+
